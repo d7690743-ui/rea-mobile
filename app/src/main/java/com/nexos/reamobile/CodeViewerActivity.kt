@@ -180,13 +180,15 @@ class CodeViewerActivity : Activity() {
     }
 
     private fun dumpSingle(desc: String) {
-        if (working || Session.dexBytes.isEmpty()) return
+        if (working) return
         working = true
         progress.visibility = View.VISIBLE
         Thread {
+            if (Session.dexBytes.isEmpty()) ensureDex()
             val text = try {
-                SmaliDumper.dumpSingleClass(Session.dexBytes, desc)
-            } catch (e: Exception) {
+                if (Session.dexBytes.isEmpty()) null
+                else SmaliDumper.dumpSingleClass(Session.dexBytes, desc)
+            } catch (e: Throwable) {
                 null
             }
             if (text != null) Session.smaliCache[desc] = text
@@ -206,23 +208,31 @@ class CodeViewerActivity : Activity() {
         working = true
         progress.visibility = View.VISIBLE
         Thread {
-            val dexes = mutableListOf<ByteArray>()
-            try {
-                ZipFile(apk).use { zip ->
-                    val en = zip.entries()
-                    while (en.hasMoreElements()) {
-                        val e = en.nextElement()
-                        if (!e.isDirectory && e.name.matches(Regex("classes\\d*\\.dex"))) {
-                            readCapped(zip, e, 160L * 1024 * 1024)?.let { dexes.add(it) }
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                // se informa en estado
-            }
-            Session.dexBytes = dexes
+            ensureDex()
             runOnUiThread { preloadSmali() }
         }.start()
+    }
+
+    /** Lee los dex del APK a memoria si la caché está vacía (hilo de fondo). */
+    private fun ensureDex() {
+        if (Session.dexBytes.isNotEmpty()) return
+        val apk = Session.apk
+        if (apk == null || !apk.isFile()) return
+        val dexes = mutableListOf<ByteArray>()
+        try {
+            ZipFile(apk).use { zip ->
+                val en = zip.entries()
+                while (en.hasMoreElements()) {
+                    val e = en.nextElement()
+                    if (!e.isDirectory && e.name.matches(Regex("classes\\d*\\.dex"))) {
+                        readCapped(zip, e, 160L * 1024 * 1024)?.let { dexes.add(it) }
+                    }
+                }
+            }
+        } catch (e: Throwable) {
+            // se informa en estado
+        }
+        Session.dexBytes = dexes
     }
 
     private fun readCapped(zip: ZipFile, e: java.util.zip.ZipEntry, max: Long): ByteArray? {
@@ -262,7 +272,7 @@ class CodeViewerActivity : Activity() {
                     Session.smaliCache[desc] = sc.text
                 }
                 Session.smaliTruncated = res.truncated
-            } catch (e: Exception) {
+            } catch (t: Throwable) {
                 // estado lo refleja
             }
             runOnUiThread {
@@ -282,6 +292,11 @@ class CodeViewerActivity : Activity() {
 
     private fun decompile(apk: File) {
         if (working) return
+        val memMsg = systemMemoryGate()
+        if (memMsg != null) {
+            updateStatus(memMsg)
+            return
+        }
         working = true
         stopRequested = false
         btnStop.isEnabled = true
@@ -290,35 +305,59 @@ class CodeViewerActivity : Activity() {
         Thread {
             val prefixes = if (Session.pkg == "?") emptyList() else listOf(Session.pkgSlash())
             var fail: String? = null
-            val res = try {
-                JadxAdapter.decompileFiltered(apk, cacheDir, 2, prefixes, 300,
+            var res: JadxAdapter.Result? = null
+            try {
+                // Libera el mayor bloque (dex en RAM) antes de cargar JADX;
+                // dumpSingle los recarga bajo demanda con ensureDex().
+                Session.dexBytes = emptyList()
+                System.gc()
+                res = JadxAdapter.decompileFiltered(apk, cacheDir, 2, prefixes, 300,
                     object : JadxAdapter.Progress {
                         override fun onClass(done: Int, matched: Int): Boolean {
                             runOnUiThread { updateStatus("JADX $done clases…") }
                             return !stopRequested
                         }
                     })
-            } catch (e: Exception) {
-                fail = e.message
-                null
-            }
-            if (res != null && res.error == null) {
-                Session.jadxCache.putAll(res.sources)
-                Session.jadxErrors = res.errors
-                Session.jadxTruncated = res.truncated
+                if (res.error == null) {
+                    Session.jadxCache.putAll(res.sources)
+                    Session.jadxErrors = res.errors
+                    Session.jadxTruncated = res.truncated
+                } else if (res.sources.isNotEmpty()) {
+                    Session.jadxCache.putAll(res.sources)
+                    Session.jadxTruncated = true
+                }
                 Session.jadxDone = true
-            } else {
+            } catch (t: OutOfMemoryError) {
+                fail = "Memoria insuficiente: prueba con un APK más pequeño o cierra apps."
                 Session.jadxDone = true
-            }
-            runOnUiThread {
-                working = false
-                btnStop.isEnabled = false
-                progress.visibility = View.GONE
-                modeSmali = false
-                showCode()
-                updateStatus(res?.error ?: fail)
+            } catch (t: Throwable) {
+                fail = t.message
+                Session.jadxDone = true
+            } finally {
+                runOnUiThread {
+                    working = false
+                    btnStop.isEnabled = false
+                    progress.visibility = View.GONE
+                    modeSmali = false
+                    showCode()
+                    updateStatus(res?.error ?: fail)
+                }
             }
         }.start()
+    }
+
+    /** Barrera previa: si el sistema está en memoria baja, ni se intenta. */
+    private fun systemMemoryGate(): String? {
+        return try {
+            val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+            val info = android.app.ActivityManager.MemoryInfo()
+            am.getMemoryInfo(info)
+            if (info.lowMemory || info.availMem < 60L * 1024 * 1024) {
+                "Memoria del sistema baja: cierra apps e inténtalo de nuevo."
+            } else null
+        } catch (t: Throwable) {
+            null
+        }
     }
 
     private fun updateStatus(extra: String? = null) {

@@ -430,8 +430,11 @@ public final class ReaEngine {
 
             buildFindings(r);
             finishStatic(r);
-        } catch (Exception e) {
-            r.error = "fallo general: " + e.getMessage();
+        } catch (OutOfMemoryError oom) {
+            r.error = "memoria insuficiente analizando (APK grande)";
+            finishStatic(r);
+        } catch (Throwable t) {
+            r.error = "fallo general: " + t.getMessage();
             finishStatic(r);
         }
         return r;
@@ -753,6 +756,11 @@ public final class ReaEngine {
                     putText(zos, "rea/INDICIOS_strings_arsc.txt", as.toString());
                     List<String> slashes = new ArrayList<>();
                     if (!"?".equals(pkg)) slashes.add(pkgSlash);
+                    // Libera dex/strings ya volcados antes de cargar JADX.
+                    dexBytes.clear();
+                    dexStrings.clear();
+                    arscStrings.clear();
+                    System.gc();
                     try {
                         File wd = outZip.getParentFile() != null ? outZip.getParentFile() : new File(".");
                         JadxAdapter.Result jr = JadxAdapter.decompileFiltered(
@@ -763,7 +771,9 @@ public final class ReaEngine {
                         r.notes.add("java: " + jr.sources.size() + " clases, errores=" + jr.errors);
                         if (jr.truncated) r.notes.add("java: recortado por topes");
                         if (jr.error != null) r.notes.add("java: " + jr.error);
-                    } catch (Exception ex) {
+                    } catch (OutOfMemoryError oom) {
+                        r.notes.add("java: memoria insuficiente");
+                    } catch (Throwable t) {
                         r.notes.add("java: no disponible");
                     }
                     ApkReport rep = analyze(apk);
@@ -787,8 +797,11 @@ public final class ReaEngine {
                 } catch (Exception ignored) {
                 }
             }
-        } catch (Exception e) {
-            r.error = "fallo general: " + e.getMessage();
+        } catch (OutOfMemoryError oom) {
+            r.error = "memoria insuficiente extrayendo (APK grande)";
+        } catch (Throwable t) {
+            String msg = t.getMessage();
+            r.error = "fallo general: " + (msg == null ? t.toString() : msg);
         }
         return r;
     }

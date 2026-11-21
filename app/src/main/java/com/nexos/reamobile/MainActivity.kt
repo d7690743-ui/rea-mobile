@@ -162,9 +162,14 @@ class MainActivity : Activity() {
                     btnView.isEnabled = true
                     progress.visibility = View.GONE
                 }
-            } catch (e: Exception) {
+            } catch (t: OutOfMemoryError) {
                 runOnUiThread {
-                    txt.text = "Error analizando: ${e.message}"
+                    txt.text = "Memoria insuficiente analizando: prueba con un APK más pequeño."
+                    progress.visibility = View.GONE
+                }
+            } catch (t: Throwable) {
+                runOnUiThread {
+                    txt.text = "Error analizando: ${t.message}"
                     progress.visibility = View.GONE
                 }
             } finally {
@@ -194,9 +199,14 @@ class MainActivity : Activity() {
                     txt.text = summary + "\n" + lastReport
                     progress.visibility = View.GONE
                 }
-            } catch (e: Exception) {
+            } catch (t: OutOfMemoryError) {
                 runOnUiThread {
-                    txt.text = "Error extrayendo: ${e.message}"
+                    txt.text = "Memoria insuficiente extrayendo: prueba con un APK más pequeño."
+                    progress.visibility = View.GONE
+                }
+            } catch (t: Throwable) {
+                runOnUiThread {
+                    txt.text = "Error extrayendo: ${t.message}"
                     progress.visibility = View.GONE
                 }
             } finally {
