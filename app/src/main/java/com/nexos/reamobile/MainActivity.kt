@@ -163,8 +163,9 @@ class MainActivity : Activity() {
             sb.append("versionName=").append(info.versionName).append('\n')
             val vCode = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
             sb.append("versionCode=").append(vCode).append('\n')
-            sb.append("minSdk=").append(info.applicationInfo.minSdkVersion).append('\n')
-            sb.append("targetSdk=").append(info.applicationInfo.targetSdkVersion).append('\n')
+            val appInfo = info.applicationInfo
+            sb.append("minSdk=").append(appInfo?.minSdkVersion ?: "?").append('\n')
+            sb.append("targetSdk=").append(appInfo?.targetSdkVersion ?: "?").append('\n')
             val perms = info.requestedPermissions
             sb.append("permisos(").append(perms?.size ?: 0).append("):\n")
             perms?.take(200)?.forEach { sb.append("  - ").append(it).append('\n') }
