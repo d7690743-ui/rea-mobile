@@ -50,6 +50,13 @@ No compila en Termux nativo (aapt2 es glibc). Se compila en GitHub Actions
 con `bash autopush.sh "mensaje"` (misma toolchain que apk-template:
 Gradle 8.9, AGP 8.7.3, Kotlin 1.9.24, Java 17, SDK 35, minSdk 24).
 
+## Créditos
+
+- [JADX](https://github.com/skylot/jadx) (Apache License 2.0): descompilación
+  DEX a Java mediante `jadx-core` + `jadx-dex-input`, sin GUI ni CLI.
+- Inspirado en [REA](https://github.com/morluto/rea) (MIT) y su fork
+  solo-Android.
+
 ## Uso responsable
 
 Analiza solo APKs que te pertenecen o para los que tienes autorización expresa.
