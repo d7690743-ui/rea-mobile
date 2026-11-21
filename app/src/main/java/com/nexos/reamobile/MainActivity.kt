@@ -44,7 +44,7 @@ class MainActivity : Activity() {
             setPadding(24, 24, 24, 24)
         }
         val title = TextView(this).apply {
-            text = "REA Mobile " + BuildConfig.VERSION_NAME + " — análisis de APK"
+            text = "REA Mobile " + appVersion() + " — análisis de APK"
             textSize = 20f
         }
         btnPick = Button(this).apply { text = "Abrir APK…" }
@@ -88,6 +88,15 @@ class MainActivity : Activity() {
         btnExtract.setOnClickListener { extractZip() }
         btnView.setOnClickListener { openViewer() }
         showDisclaimerOnce()
+    }
+
+    private fun appVersion(): String {
+        return try {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+        } catch (t: Throwable) {
+            "?"
+        }
     }
 
     private fun showDisclaimerOnce() {
