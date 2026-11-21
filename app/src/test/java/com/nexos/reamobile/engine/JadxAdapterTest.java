@@ -6,10 +6,13 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -81,6 +84,7 @@ public class JadxAdapterTest {
                 new ArrayList<String>(), 10, null, siempreBaja);
         assertNotNull(r.error);
         assertTrue(r.error, r.error.contains("memoria"));
+        assertTrue(r.memoryAbort);
         assertEquals(0, r.sources.size());
         // Baja a media pasada: trunca con parcial en vez de lanzar.
         final int[] llamadas = {0};
@@ -93,6 +97,102 @@ public class JadxAdapterTest {
         JadxAdapter.Result r2 = JadxAdapter.decompileFiltered(dex, tmp.getRoot(), 1,
                 new ArrayList<String>(), 10, null, aLaSegunda);
         assertTrue(r2.truncated);
+        assertTrue(r2.memoryAbort);
         assertNotNull(r2.error);
+    }
+
+    @Test(timeout = 180000)
+    public void apkReintentaPorDexTrasAbortoMemoria() throws Exception {
+        File apk = new File(tmp.getRoot(), "t.apk");
+        ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(apk));
+        byte[] dex = SmaliExtractTest.buildTestDex();
+        zos.putNextEntry(new ZipEntry("classes.dex"));
+        zos.write(dex);
+        zos.closeEntry();
+        zos.close();
+        // Baja solo en la primera consulta: aborta la carga completa,
+        // el fallback por dex sí procede.
+        final int[] llamadas = {0};
+        JadxAdapter.MemoryPolicy bajaUnaVez = new JadxAdapter.MemoryPolicy() {
+            @Override
+            public boolean lowMemory() {
+                return (++llamadas[0] == 1);
+            }
+        };
+        final List<String> fases = new ArrayList<>();
+        JadxAdapter.Progress prog = new JadxAdapter.Progress() {
+            @Override
+            public boolean onClass(int done, int matched) {
+                return true;
+            }
+
+            @Override
+            public void onPhase(String name) {
+                fases.add(name);
+            }
+        };
+        JadxAdapter.Result r = JadxAdapter.decompileFiltered(apk, tmp.getRoot(), 1,
+                new ArrayList<String>(), 10, prog, bajaUnaVez);
+        assertNull("fallback por dex debe rescatar: " + r.error, r.error);
+        assertEquals(1, r.sources.size());
+        assertTrue(r.sources.containsKey("com.x.A"));
+        assertTrue(fases.toString(), fases.contains("cargando APK"));
+        assertTrue(fases.toString(), fases.contains("reintentando por dex"));
+    }
+
+    @Test(timeout = 180000)
+    public void apkPorDexMezclaSinLanzar() throws Exception {
+        File apk = new File(tmp.getRoot(), "t.apk");
+        ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(apk));
+        byte[] dex = SmaliExtractTest.buildTestDex();
+        zos.putNextEntry(new ZipEntry("classes.dex"));
+        zos.write(dex);
+        zos.closeEntry();
+        zos.putNextEntry(new ZipEntry("classes2.dex"));
+        zos.write(dex);
+        zos.closeEntry();
+        zos.close();
+        final List<String> fases = new ArrayList<>();
+        JadxAdapter.Progress prog = new JadxAdapter.Progress() {
+            @Override
+            public boolean onClass(int done, int matched) {
+                return true;
+            }
+
+            @Override
+            public void onPhase(String name) {
+                fases.add(name);
+            }
+        };
+        // Aborta la carga completa para forzar el camino por dex.
+        final int[] llamadas = {0};
+        JadxAdapter.MemoryPolicy bajaUnaVez = new JadxAdapter.MemoryPolicy() {
+            @Override
+            public boolean lowMemory() {
+                return (++llamadas[0] == 1);
+            }
+        };
+        JadxAdapter.Result r = JadxAdapter.decompileFiltered(apk, tmp.getRoot(), 1,
+                new ArrayList<String>(), 10, prog, bajaUnaVez);
+        assertNull(r.error);
+        assertEquals(2, r.classes);
+        assertEquals(1, r.sources.size());
+        assertTrue(r.sources.containsKey("com.x.A"));
+        assertTrue(fases.toString(), fases.contains("reintentando por dex"));
+        assertTrue(fases.toString(), fases.contains("dex 1/2"));
+        assertTrue(fases.toString(), fases.contains("dex 2/2"));
+    }
+
+    @Test(timeout = 180000)
+    public void apkSinDexVacioSinLanzar() throws Exception {
+        File apk = new File(tmp.getRoot(), "vacio.apk");
+        ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(apk));
+        zos.putNextEntry(new ZipEntry("a.txt"));
+        zos.write(new byte[]{1});
+        zos.closeEntry();
+        zos.close();
+        JadxAdapter.Result r = JadxAdapter.decompileFiltered(apk, tmp.getRoot(), 1,
+                new ArrayList<String>(), 10, null);
+        assertTrue(r.sources.isEmpty());
     }
 }

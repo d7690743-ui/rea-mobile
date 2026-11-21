@@ -19,7 +19,7 @@ salvo indicación. Nada aquí se declara sin su prueba o medición.
 | Bucles | etiquetas OK | OK | pendiente F3.4 | — |
 | try/catch | omitido (documentado) | OK con WARNs multi-try | pendiente F3.4 | WARN jadx "bottom block", 0 errores |
 | Ofuscación | ratio en `analyze` | best-effort | pendiente | heurística, no desofusca |
-| APK grande / OOM | topes + `largeHeap` | `MemoryPolicy` + parcial | topes `MAX_INSNS` | v0.3.1, `memoriaBajaAbortaSinLanzar` |
+| APK grande / OOM | topes + `largeHeap` | completo + fallback por dex | topes `MAX_INSNS` | v0.3.2, `apkReintentaPorDexTrasAbortoMemoria` |
 
 ## Comparativa contra referencia
 
@@ -37,6 +37,10 @@ salvo indicación. Nada aquí se declara sin su prueba o medición.
 
 ## Pendiente (no prometido)
 
-- Reintento por dex si `load()` OOMea en APK enorme.
 - F3.2 tipos, F3.3 SSA-lite, F3.4 estructuración, F3.5 emisor.
-- Validación en dispositivo del fix OOM v0.3.1 (usuario).
+- Validación en dispositivo del descompilado Java v0.3.2 (usuario).
+
+Nota v0.3.2: APK intenta carga completa (125 java, 0 err) y si aborta
+por memoria reintenta por dex (medido: 124 java, 8 err métodos cross-dex).
+Se devuelve el mejor parcial; el visor muestra fases ("cargando APK",
+"dex i/N", "reintentando por dex").

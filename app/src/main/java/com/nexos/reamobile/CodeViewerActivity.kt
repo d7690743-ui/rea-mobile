@@ -136,6 +136,12 @@ class CodeViewerActivity : Activity() {
         super.onDestroy()
     }
 
+    /** Estado de trabajo + botón Descompilar bloqueado mientras hay tarea. */
+    private fun markWorking(on: Boolean) {
+        working = on
+        btnDecompile.isEnabled = !on
+    }
+
     private fun refreshList(items: List<String>) {
         filtered = items
         adapter.clear()
@@ -181,7 +187,7 @@ class CodeViewerActivity : Activity() {
 
     private fun dumpSingle(desc: String) {
         if (working) return
-        working = true
+        markWorking(true)
         progress.visibility = View.VISIBLE
         Thread {
             if (Session.dexBytes.isEmpty()) ensureDex()
@@ -193,7 +199,7 @@ class CodeViewerActivity : Activity() {
             }
             if (text != null) Session.smaliCache[desc] = text
             runOnUiThread {
-                working = false
+                markWorking(false)
                 progress.visibility = View.GONE
                 if (selected == desc && modeSmali) code.text = text ?: "(sin smali)"
             }
@@ -205,7 +211,7 @@ class CodeViewerActivity : Activity() {
             preloadSmali()
             return
         }
-        working = true
+        markWorking(true)
         progress.visibility = View.VISIBLE
         Thread {
             ensureDex()
@@ -257,7 +263,7 @@ class CodeViewerActivity : Activity() {
 
     private fun preloadSmali() {
         if (Session.smaliCache.isNotEmpty()) {
-            working = false
+            markWorking(false)
             progress.visibility = View.GONE
             if (Session.appClasses.isEmpty()) refreshList(Session.smaliCache.keys.sorted())
             autoSelect()
@@ -276,7 +282,7 @@ class CodeViewerActivity : Activity() {
                 // estado lo refleja
             }
             runOnUiThread {
-                working = false
+                markWorking(false)
                 progress.visibility = View.GONE
                 if (Session.appClasses.isEmpty()) refreshList(Session.smaliCache.keys.sorted())
                 autoSelect()
@@ -297,7 +303,7 @@ class CodeViewerActivity : Activity() {
             updateStatus(memMsg)
             return
         }
-        working = true
+        markWorking(true)
         stopRequested = false
         btnStop.isEnabled = true
         progress.visibility = View.VISIBLE
@@ -317,6 +323,10 @@ class CodeViewerActivity : Activity() {
                             runOnUiThread { updateStatus("JADX $done clases…") }
                             return !stopRequested
                         }
+
+                        override fun onPhase(name: String) {
+                            runOnUiThread { updateStatus("JADX $name…") }
+                        }
                     })
                 if (res.error == null) {
                     Session.jadxCache.putAll(res.sources)
@@ -335,7 +345,7 @@ class CodeViewerActivity : Activity() {
                 Session.jadxDone = true
             } finally {
                 runOnUiThread {
-                    working = false
+                    markWorking(false)
                     btnStop.isEnabled = false
                     progress.visibility = View.GONE
                     modeSmali = false
