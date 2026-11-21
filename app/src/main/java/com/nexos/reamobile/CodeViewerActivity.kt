@@ -541,7 +541,7 @@ class CodeViewerActivity : Activity() {
                 lastFindQuery = q
             }
             if (lastFindMatches.isNotEmpty()) {
-                lastFindIdx = (lastFindIdx + 1) % lastFindMatches.size()
+                lastFindIdx = (lastFindIdx + 1) % lastFindMatches.size
                 val h = lastFindMatches[lastFindIdx]
                 modeSmali = false
                 showingLog = false
@@ -550,7 +550,7 @@ class CodeViewerActivity : Activity() {
                 }
                 if (desc != null) selected = desc
                 code.text = Session.jadxCache[h.className] ?: code.text.toString()
-                msg += "; java ${lastFindIdx + 1}/${lastFindMatches.size()} ${h.className}:${h.line}"
+                msg += "; java ${lastFindIdx + 1}/${lastFindMatches.size} ${h.className}:${h.line}"
             } else {
                 msg += "; java-global: 0"
             }
