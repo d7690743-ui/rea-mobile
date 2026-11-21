@@ -211,6 +211,87 @@ public class JadxAdapterTest {
         assertTrue("rescatada: " + r.error, r.sources.containsKey("com.x.A"));
     }
 
+    @Test
+    public void scanDexesLocalizaPaquete() throws Exception {
+        File apk = new File(tmp.getRoot(), "s.apk");
+        byte[] dex = SmaliExtractTest.buildTestDex();
+        writeZip(apk, new String[]{"classes.dex", "classes2.dex"}, new byte[][]{dex, dex});
+        List<String> pref = new ArrayList<>();
+        pref.add("com/x/");
+        List<JadxAdapter.DexHit> hits = JadxAdapter.scanDexes(apk, pref);
+        assertEquals(2, hits.size());
+        for (JadxAdapter.DexHit h : hits) {
+            assertNull(h.error);
+            assertEquals(1, h.totalClasses);
+            assertEquals(1, h.matched);
+        }
+        List<String> none = new ArrayList<>();
+        none.add("zzz/");
+        List<JadxAdapter.DexHit> miss = JadxAdapter.scanDexes(apk, none);
+        assertEquals(2, miss.size());
+        assertEquals(0, miss.get(0).matched);
+        File vacio = new File(tmp.getRoot(), "v.apk");
+        writeZip(vacio, new String[]{"a.txt"}, new byte[][]{new byte[]{1}});
+        assertTrue(JadxAdapter.scanDexes(vacio, pref).isEmpty());
+        File basura = new File(tmp.getRoot(), "b.apk");
+        Files.write(basura.toPath(), new byte[]{1, 2, 3});
+        assertTrue(JadxAdapter.scanDexes(basura, pref).isEmpty());
+        assertTrue(JadxAdapter.scanDexes(null, pref).isEmpty());
+    }
+
+    @Test(timeout = 180000)
+    public void loteOmiteDexSinCoincidencias() throws Exception {
+        File apk = new File(tmp.getRoot(), "s.apk");
+        byte[] dex = SmaliExtractTest.buildTestDex();
+        writeZip(apk, new String[]{"classes.dex", "classes2.dex"}, new byte[][]{dex, dex});
+        List<String> none = new ArrayList<>();
+        none.add("zzz/");
+        final int[] llamadas = {0};
+        JadxAdapter.MemoryPolicy bajaUnaVez = new JadxAdapter.MemoryPolicy() {
+            @Override
+            public boolean lowMemory() {
+                return (++llamadas[0] == 1);
+            }
+        };
+        JadxAdapter.Result r = JadxAdapter.decompileFiltered(apk, tmp.getRoot(), 1,
+                none, 10, null, bajaUnaVez);
+        assertTrue(r.sources.isEmpty());
+        String log = r.log.toString();
+        assertTrue(log, log.contains("dex con coincidencias: 0 de 2"));
+        assertTrue(log, log.contains("[classes.dex] omitido: sin coincidencias"));
+        assertTrue(log, log.contains("[classes2.dex] omitido: sin coincidencias"));
+    }
+
+    @Test(timeout = 180000)
+    public void logRegistraFalloCarga() throws Exception {
+        File apk = new File(tmp.getRoot(), "mix.apk");
+        writeZip(apk, new String[]{"classes.dex", "classes2.dex"},
+                new byte[][]{new byte[]{9, 9, 9, 9}, SmaliExtractTest.buildTestDex()});
+        final int[] llamadas = {0};
+        JadxAdapter.MemoryPolicy bajaUnaVez = new JadxAdapter.MemoryPolicy() {
+            @Override
+            public boolean lowMemory() {
+                return (++llamadas[0] == 1);
+            }
+        };
+        JadxAdapter.Result r = JadxAdapter.decompileFiltered(apk, tmp.getRoot(), 1,
+                new ArrayList<String>(), 10, null, bajaUnaVez);
+        assertTrue(r.sources.containsKey("com.x.A"));
+        String log = r.log.toString();
+        assertTrue(log, log.contains("[classes.dex]"));
+        assertTrue(log, log.contains("[classes2.dex] java=+1"));
+    }
+
+    static void writeZip(File out, String[] names, byte[][] datas) throws Exception {
+        ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(out));
+        for (int i = 0; i < names.length; i++) {
+            zos.putNextEntry(new ZipEntry(names[i]));
+            zos.write(datas[i]);
+            zos.closeEntry();
+        }
+        zos.close();
+    }
+
     @Test(timeout = 180000)
     public void apkSinDexVacioSinLanzar() throws Exception {
         File apk = new File(tmp.getRoot(), "vacio.apk");

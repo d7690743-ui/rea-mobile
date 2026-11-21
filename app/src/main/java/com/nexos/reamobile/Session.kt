@@ -16,6 +16,7 @@ object Session {
     var jadxTruncated = false
     var jadxDone = false
     var jadxError: String? = null
+    var jadxLog: List<String> = emptyList()
 
     fun pkgSlash(): String = if (pkg == "?") "?/" else pkg.replace('.', '/') + "/"
 
@@ -28,5 +29,6 @@ object Session {
         jadxTruncated = false
         jadxDone = false
         jadxError = null
+        jadxLog = emptyList()
     }
 }

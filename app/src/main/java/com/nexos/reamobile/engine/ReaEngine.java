@@ -771,6 +771,11 @@ public final class ReaEngine {
                         r.notes.add("java: " + jr.sources.size() + " clases, errores=" + jr.errors);
                         if (jr.truncated) r.notes.add("java: recortado por topes");
                         if (jr.error != null) r.notes.add("java: " + jr.error);
+                        int nl = 0;
+                        for (String l : jr.log) {
+                            if (nl++ >= 25) break;
+                            r.notes.add("java-log: " + l);
+                        }
                     } catch (OutOfMemoryError oom) {
                         r.notes.add("java: memoria insuficiente");
                     } catch (Throwable t) {

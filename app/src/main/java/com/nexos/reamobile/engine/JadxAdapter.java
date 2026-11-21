@@ -68,7 +68,21 @@ public final class JadxAdapter {
         public boolean truncated;
         public boolean memoryAbort;
         public String error;
+        public List<String> log = new ArrayList<>();
     }
+
+    /** Coincidencias de un dex (escaneo previo sin JADX). */
+    public static class DexHit {
+        public String name = "?";
+        public long size = -1;
+        public int totalClasses;
+        public boolean truncated;
+        public int matched;
+        public String error;
+    }
+
+    /** Tope de líneas de log por resultado. */
+    public static final int MAX_LOG_LINES = 120;
 
     /** Descompila todo el dex/apk sin filtro. Nunca lanza. */
     public static Result decompile(File input, File workDir, int threads) {
@@ -131,7 +145,7 @@ public final class JadxAdapter {
                         maxClasses, progress, mem);
             }
             return decompileSingle(input, workDir, threads, pkgSlashes,
-                    maxClasses, progress, mem);
+                    maxClasses, progress, mem, input.getName());
         } catch (Throwable t) {
             r.error = "jadx: " + fullMsg(t);
             return r;
@@ -141,13 +155,14 @@ public final class JadxAdapter {
     /** Un .dex suelto: carga directa. Nunca lanza. */
     private static Result decompileSingle(File input, File workDir, int threads,
                                           List<String> pkgSlashes, int maxClasses, Progress progress,
-                                          MemoryPolicy mem) {
+                                          MemoryPolicy mem, String tag) {
         Result r = new Result();
         JadxDecompiler jadx = null;
         try {
             if (lowMem(mem)) {
                 r.memoryAbort = true;
                 r.error = "memoria baja: no se pudo cargar JADX";
+                log(r, "[" + tag + "] MEMORIA: sin cargar");
                 return r;
             }
             int cap = maxClasses <= 0 ? Integer.MAX_VALUE : maxClasses;
@@ -197,6 +212,7 @@ public final class JadxAdapter {
                     r.truncated = true;
                     r.memoryAbort = true;
                     r.error = "memoria baja: parcial (" + r.sources.size() + " clases)";
+                    log(r, "[" + tag + "] MEMORIA: parcial " + r.sources.size());
                     break;
                 }
                 String code;
@@ -207,9 +223,11 @@ public final class JadxAdapter {
                     r.memoryAbort = true;
                     r.error = "memoria insuficiente (parcial: "
                             + r.sources.size() + " clases)";
+                    log(r, "[" + tag + "] OOM en " + clsName(cls));
                     break;
                 } catch (Throwable t) {
                     r.errors++;
+                    log(r, "[" + tag + "] ERR " + clsName(cls) + ": " + shortMsg(t));
                     continue;
                 }
                 if (code != null) {
@@ -244,8 +262,10 @@ public final class JadxAdapter {
             r.truncated = true;
             r.memoryAbort = true;
             r.error = "memoria insuficiente para JADX";
+            log(r, "[" + tag + "] OOM general");
         } catch (Throwable t) {
             r.error = "jadx: " + fullMsg(t);
+            log(r, "[" + tag + "] LOAD: " + r.error);
         } finally {
             if (jadx != null) {
                 try {
@@ -302,6 +322,126 @@ public final class JadxAdapter {
         }
     }
 
+    private static void log(Result r, String s) {
+        if (r.log.size() >= MAX_LOG_LINES) return;
+        if (s.length() > 220) s = s.substring(0, 220) + "…";
+        r.log.add(s);
+    }
+
+    private static String shortMsg(Throwable t) {
+        try {
+            String m = String.valueOf(t);
+            return m.length() > 140 ? m.substring(0, 140) + "…" : m;
+        } catch (Throwable ignored) {
+            return "?";
+        }
+    }
+
+    private static String clsName(JavaClass cls) {
+        try {
+            return cls.getFullName();
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    /**
+     * Escaneo previo: qué dex traen clases del filtro, sin cargar JADX.
+     * Barato (DexParser) y nunca lanza.
+     */
+    public static List<DexHit> scanDexes(File apk, List<String> pkgSlashes) {
+        List<DexHit> out = new ArrayList<>();
+        try {
+            if (apk == null || !apk.isFile()) return out;
+            ZipFile zip = new ZipFile(apk);
+            try {
+                List<String> names = new ArrayList<>();
+                Enumeration<? extends ZipEntry> en = zip.entries();
+                while (en.hasMoreElements()) {
+                    ZipEntry e = en.nextElement();
+                    if (!e.isDirectory() && e.getName().matches("classes\\d*\\.dex")) {
+                        names.add(e.getName());
+                    }
+                }
+                Collections.sort(names);
+                for (String dn : names) {
+                    DexHit h = new DexHit();
+                    h.name = dn;
+                    try {
+                        ZipEntry e = zip.getEntry(dn);
+                        h.size = e == null ? -1 : e.getSize();
+                        byte[] bytes = readBytes(zip, dn);
+                        if (bytes == null) {
+                            h.error = "no legible";
+                        } else {
+                            DexParser.DexInfo di = DexParser.parse(bytes, dn);
+                            if (di.error != null) {
+                                h.error = di.error;
+                            } else {
+                                h.totalClasses = di.classCount;
+                                h.truncated = di.classesTruncated;
+                                h.matched = countMatches(di.classes, pkgSlashes);
+                            }
+                        }
+                    } catch (Throwable t) {
+                        h.error = "scan: " + shortMsg(t);
+                    }
+                    out.add(h);
+                }
+            } finally {
+                try {
+                    zip.close();
+                } catch (Throwable ignored) {
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
+    private static int countMatches(List<DexParser.ClassInfo> classes, List<String> pkgSlashes) {
+        if (pkgSlashes == null || pkgSlashes.isEmpty()) return classes.size();
+        int n = 0;
+        for (DexParser.ClassInfo ci : classes) {
+            if (ci == null || ci.name == null) continue;
+            for (String p : pkgSlashes) {
+                if (p != null && ci.name.startsWith("L" + p)) {
+                    n++;
+                    break;
+                }
+            }
+        }
+        return n;
+    }
+
+    private static byte[] readBytes(ZipFile zip, String name) {
+        try {
+            ZipEntry e = zip.getEntry(name);
+            if (e == null) return null;
+            InputStream in = zip.getInputStream(e);
+            try {
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[32768];
+                long total = 0;
+                while (true) {
+                    int n = in.read(buf);
+                    if (n <= 0) break;
+                    total += n;
+                    if (total > MAX_DEX_PART) return null;
+                    bos.write(buf, 0, n);
+                }
+                return bos.toByteArray();
+            } finally {
+                try {
+                    in.close();
+                } catch (Throwable ignored) {
+                }
+            }
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private static boolean isZip(File f) {
         FileInputStream in = null;
         try {
@@ -331,7 +471,7 @@ public final class JadxAdapter {
                                        Progress progress, MemoryPolicy mem) {
         phase(progress, "cargando APK");
         Result full = decompileSingle(apk, workDir, threads, pkgSlashes,
-                maxClasses, progress, mem);
+                maxClasses, progress, mem, "APK");
         boolean totalFail = full.sources.isEmpty() && full.error != null;
         if (!full.memoryAbort && !totalFail) return full;
         phase(progress, "reintentando por dex");
@@ -341,7 +481,7 @@ public final class JadxAdapter {
         }
         Result per = decompileZipPerDex(apk, workDir, threads, pkgSlashes,
                 maxClasses, progress, mem);
-        if (per.sources.size() > full.sources.size()) return per;
+        if (per.sources.size() > full.sources.size() || full.sources.isEmpty()) return per;
         return full;
     }
 
@@ -381,31 +521,49 @@ public final class JadxAdapter {
             return acc;
         }
         Collections.sort(dexNames);
+        // Búsqueda previa: solo se cargan dex con coincidencias.
+        phase(progress, "localizando clases");
+        Map<String, DexHit> hits = new LinkedHashMap<>();
+        for (DexHit h : scanDexes(apk, pkgSlashes)) hits.put(h.name, h);
+        int withHits = 0;
+        for (String dn : dexNames) {
+            DexHit h = hits.get(dn);
+            if (h == null || h.truncated || h.error != null || h.matched > 0) withHits++;
+        }
+        log(acc, "dex con coincidencias: " + withHits + " de " + dexNames.size());
         File parts = new File(workDir, "dexparts");
         parts.mkdirs();
         long chars = 0;
         int idx = 0;
         for (String dn : dexNames) {
             idx++;
+            DexHit h = hits.get(dn);
+            if (h != null && !h.truncated && h.error == null && h.matched == 0) {
+                log(acc, "[" + dn + "] omitido: sin coincidencias (" + h.totalClasses + " clases)");
+                continue;
+            }
             if (lowMem(mem)) {
                 acc.truncated = true;
                 if (acc.error == null) {
                     acc.error = "memoria baja: parcial (" + acc.sources.size() + " clases)";
                 }
+                log(acc, "MEMORIA: parada en dex " + idx);
                 break;
             }
             if (acc.sources.size() >= cap || chars > MAX_SOURCE_CHARS) {
                 acc.truncated = true;
+                log(acc, "tope alcanzado en dex " + idx);
                 break;
             }
             phase(progress, "dex " + idx + "/" + dexNames.size());
             File part = new File(parts, "part" + idx + ".dex");
             if (!extractEntry(apk, dn, part)) {
                 acc.truncated = true;
+                log(acc, "[" + dn + "] omitido: no extraíble");
                 continue;
             }
             Result one = decompileSingle(part, workDir, threads, pkgSlashes,
-                    cap - acc.sources.size(), progress, mem);
+                    cap - acc.sources.size(), progress, mem, dn);
             try {
                 part.delete();
             } catch (Throwable ignored) {
@@ -415,6 +573,10 @@ public final class JadxAdapter {
             if (one.truncated) acc.truncated = true;
             if (one.memoryAbort) acc.memoryAbort = true;
             if (one.error != null && acc.error == null) acc.error = one.error;
+            for (String l : one.log) log(acc, l);
+            log(acc, "[" + dn + "] java=+" + one.sources.size() + " err=" + one.errors);
+            phase(progress, "dex " + idx + "/" + dexNames.size() + ": " + one.sources.size()
+                    + " java");
             for (Map.Entry<String, String> e : one.sources.entrySet()) {
                 if (acc.sources.containsKey(e.getKey())) continue;
                 String code = e.getValue();

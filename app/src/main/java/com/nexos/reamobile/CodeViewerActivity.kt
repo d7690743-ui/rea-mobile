@@ -39,10 +39,12 @@ class CodeViewerActivity : Activity() {
     private lateinit var btnDecompile: Button
     private lateinit var btnStop: Button
     private lateinit var btnExport: Button
+    private lateinit var btnLog: Button
     private lateinit var progress: ProgressBar
     private var filtered: List<String> = emptyList()
     private var selected: String? = null
     private var modeSmali = true
+    private var showingLog = false
     private var working = false
     @Volatile private var stopRequested = false
 
@@ -78,12 +80,14 @@ class CodeViewerActivity : Activity() {
         btnJava = Button(this).apply { text = "Java" }
         btnDecompile = Button(this).apply { text = "Descompilar" }
         btnStop = Button(this).apply { text = "Detener"; isEnabled = false }
+        btnLog = Button(this).apply { text = "Log" }
         val rowTabs = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(btnSmali, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(btnJava, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(btnDecompile, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(btnStop, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(btnLog, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         }
         codeSearch = EditText(this).apply { hint = "buscar en código…" }
         val btnFind = Button(this).apply { text = "Buscar" }
@@ -116,10 +120,11 @@ class CodeViewerActivity : Activity() {
 
         btnFilter.setOnClickListener { applyFilter() }
         btnFind.setOnClickListener { findInCode() }
-        btnSmali.setOnClickListener { modeSmali = true; showCode() }
-        btnJava.setOnClickListener { modeSmali = false; showCode() }
+        btnSmali.setOnClickListener { modeSmali = true; showingLog = false; showCode() }
+        btnJava.setOnClickListener { modeSmali = false; showingLog = false; showCode() }
         btnDecompile.setOnClickListener { decompile(apk) }
         btnStop.setOnClickListener { stopRequested = true }
+        btnLog.setOnClickListener { toggleLog() }
         btnExport.setOnClickListener { exportCurrent() }
         list.onItemClickListener =
             AdapterView.OnItemClickListener { _, _, pos, _ ->
@@ -162,7 +167,19 @@ class CodeViewerActivity : Activity() {
 
     private fun selectClass(desc: String) {
         selected = desc
+        showingLog = false
         showCode()
+    }
+
+    private fun toggleLog() {
+        showingLog = !showingLog
+        if (!showingLog) {
+            showCode()
+            return
+        }
+        val log = Session.jadxLog
+        code.text = if (log.isEmpty()) "(log vacío: aún no se descompila)"
+        else log.joinToString("\n")
     }
 
     private fun showCode() {
@@ -341,6 +358,7 @@ class CodeViewerActivity : Activity() {
                     Session.jadxCache.putAll(res.sources)
                     Session.jadxTruncated = true
                 }
+                Session.jadxLog = res.log.toList()
                 Session.jadxDone = true
             } catch (t: OutOfMemoryError) {
                 fail = "Memoria insuficiente: prueba con un APK más pequeño o cierra apps."
@@ -355,6 +373,7 @@ class CodeViewerActivity : Activity() {
                     btnStop.isEnabled = false
                     progress.visibility = View.GONE
                     modeSmali = false
+                    showingLog = false
                     showCode()
                     updateStatus(res?.error ?: fail)
                 }
@@ -413,8 +432,9 @@ class CodeViewerActivity : Activity() {
         val sel = selected
         val text = code.text.toString()
         if (sel == null || text.isEmpty()) return
-        val ext = if (modeSmali) "smali" else "java"
-        val simple = sel.removePrefix("L").removeSuffix(";").substringAfterLast('/').replace('$', '_')
+        val ext = if (showingLog) "log" else if (modeSmali) "smali" else "java"
+        val simple = if (showingLog) "jadx-log"
+            else sel.removePrefix("L").removeSuffix(";").substringAfterLast('/').replace('$', '_')
         try {
             val dest = saveTextToDownloads(text, "$simple.$ext")
             hits.text = "Guardado: $dest"
