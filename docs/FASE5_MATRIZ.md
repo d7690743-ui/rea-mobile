@@ -1,6 +1,6 @@
 # Fase 5 — Matriz de pruebas + comparativa JADX
 
-Corpus: APK propio `tubemusic` (multidex: 6 dex, Kotlin+Java) + DEX
+Corpus: APK propio `tubemusic` (multidex: 5 dex, Kotlin+Java) + DEX
 sintético (`SmaliExtractTest.buildTestDex`, 5 métodos). Medido en local
 salvo indicación. Nada aquí se declara sin su prueba o medición.
 
@@ -10,7 +10,7 @@ salvo indicación. Nada aquí se declara sin su prueba o medición.
 |---|---|---|---|---|
 | Java clases propias | 124 clases OK | 125 java, 0 err, 16 s | visor Smali/Java | `DumpAllProbe`, `JProbe` |
 | Kotlin (lambdas, `$` sintéticos) | etiquetas OK | 0 errores | pendiente F3.4 | `MainActivity$$ExternalSyntheticLambda*` |
-| Multidex (6 dex) | `dumpAll` todos | nativo (4462 clases) | por método (F3.1) | `unzip -l`, `JProbe` |
+| Multidex (5 dex) | `dumpAll` todos | nativo (4462 clases) | por método (F3.1) | `unzip -l`, `JProbe` |
 | Clases internas (`R$*`, `$show$1`) | OK | `getClassesWithInners` OK | — (hereda smali) | volcado `/tmp/smali-fixed` |
 | packed-switch | 2/2 exactos vs baksmali | OK | cases en CFG (synth) | size+first_key+claves bit a bit |
 | sparse-switch | 3/3 exactos vs baksmali | OK | cases en CFG (synth) | MainActivity 3, MusicDownload 7, PlaybackService 6 |

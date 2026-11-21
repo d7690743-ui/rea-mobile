@@ -180,8 +180,12 @@ class CodeViewerActivity : Activity() {
                 dumpSingle(sel)
             }
         } else {
-            val full = sel.removePrefix("L").removeSuffix(";").replace('/', '.')
-            code.text = Session.jadxCache[full] ?: "(pulsa Descompilar para Java)"
+            val text = JadxAdapter.candidateKeys(sel)
+                .asSequence()
+                .mapNotNull { Session.jadxCache[it] }
+                .firstOrNull()
+            code.text = text
+                ?: "(sin Java para ${shortName(sel)} — caché: ${Session.jadxCache.size})"
         }
     }
 

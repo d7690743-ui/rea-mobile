@@ -183,6 +183,18 @@ public class JadxAdapterTest {
         assertTrue(fases.toString(), fases.contains("dex 2/2"));
     }
 
+    @Test
+    public void clavesCandidatasInner() {
+        assertEquals(java.util.Arrays.asList("com.x.A"),
+                JadxAdapter.candidateKeys("Lcom/x/A;"));
+        assertEquals(java.util.Arrays.asList("com.x.R$color", "com.x.R.color"),
+                JadxAdapter.candidateKeys("Lcom/x/R$color;"));
+        assertEquals(
+                java.util.Arrays.asList("com.x.A$B$C", "com.x.A$B.C", "com.x.A.B.C"),
+                JadxAdapter.candidateKeys("Lcom/x/A$B$C;"));
+        assertTrue(JadxAdapter.candidateKeys(null).isEmpty());
+    }
+
     @Test(timeout = 180000)
     public void apkSinDexVacioSinLanzar() throws Exception {
         File apk = new File(tmp.getRoot(), "vacio.apk");

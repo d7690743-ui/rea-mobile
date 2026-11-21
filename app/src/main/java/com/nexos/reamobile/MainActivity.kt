@@ -44,7 +44,7 @@ class MainActivity : Activity() {
             setPadding(24, 24, 24, 24)
         }
         val title = TextView(this).apply {
-            text = "REA Mobile — análisis de APK"
+            text = "REA Mobile " + BuildConfig.VERSION_NAME + " — análisis de APK"
             textSize = 20f
         }
         btnPick = Button(this).apply { text = "Abrir APK…" }

@@ -76,6 +76,32 @@ public final class JadxAdapter {
     }
 
     /**
+     * Claves candidatas en Result.sources para un descriptor smali.
+     * JADX nombra inners con puntos (a.b.C.D) y el smali con $ (a/b/C$D):
+     * se prueban exacta, último $→punto y todos $→punto. Nunca lanza.
+     */
+    public static List<String> candidateKeys(String smaliDesc) {
+        List<String> out = new ArrayList<>();
+        try {
+            if (smaliDesc == null) return out;
+            String base = smaliDesc;
+            if (base.startsWith("L") && base.endsWith(";") && base.length() > 2) {
+                base = base.substring(1, base.length() - 1).replace('/', '.');
+            }
+            out.add(base);
+            int last = base.lastIndexOf('$');
+            if (last >= 0) {
+                String one = base.substring(0, last) + '.' + base.substring(last + 1);
+                if (!out.contains(one)) out.add(one);
+                String all = base.replace('$', '.');
+                if (!out.contains(all)) out.add(all);
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
+    /**
      * Descompila con filtro de paquetes (prefijos estilo "com/x/"), tope de
      * clases (0 = sin tope) y progreso cancelable. Nunca lanza, ni siquiera
      * ante OutOfMemoryError: devuelve parcial con error legible.
