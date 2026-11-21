@@ -133,8 +133,7 @@ public final class JadxAdapter {
             return decompileSingle(input, workDir, threads, pkgSlashes,
                     maxClasses, progress, mem);
         } catch (Throwable t) {
-            String msg = t.getMessage();
-            r.error = "jadx: " + (msg == null ? t.toString() : msg);
+            r.error = "jadx: " + fullMsg(t);
             return r;
         }
     }
@@ -246,8 +245,7 @@ public final class JadxAdapter {
             r.memoryAbort = true;
             r.error = "memoria insuficiente para JADX";
         } catch (Throwable t) {
-            String msg = t.getMessage();
-            r.error = "jadx: " + (msg == null ? t.toString() : msg);
+            r.error = "jadx: " + fullMsg(t);
         } finally {
             if (jadx != null) {
                 try {
@@ -265,6 +263,34 @@ public final class JadxAdapter {
             return mem.lowMemory();
         } catch (Throwable t) {
             return false;
+        }
+    }
+
+    /** Cadena de causas + primer marco (el mensaje solo suele decir nada). */
+    private static String fullMsg(Throwable t) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            int depth = 0;
+            Throwable cur = t;
+            Throwable deepest = t;
+            while (cur != null && depth < 4) {
+                if (depth > 0) sb.append(" <-causa- ");
+                String m = String.valueOf(cur);
+                if (m.length() > 300) m = m.substring(0, 300) + "…";
+                sb.append(m);
+                deepest = cur;
+                cur = cur.getCause();
+                depth++;
+            }
+            StackTraceElement[] st = deepest.getStackTrace();
+            if (st != null && st.length > 0) {
+                sb.append(" [en ").append(st[0].getClassName()).append('.')
+                        .append(st[0].getMethodName()).append(':')
+                        .append(st[0].getLineNumber()).append(']');
+            }
+            return sb.length() == 0 ? "?" : sb.toString();
+        } catch (Throwable ignored) {
+            return "?";
         }
     }
 
@@ -306,7 +332,8 @@ public final class JadxAdapter {
         phase(progress, "cargando APK");
         Result full = decompileSingle(apk, workDir, threads, pkgSlashes,
                 maxClasses, progress, mem);
-        if (!full.memoryAbort) return full;
+        boolean totalFail = full.sources.isEmpty() && full.error != null;
+        if (!full.memoryAbort && !totalFail) return full;
         phase(progress, "reintentando por dex");
         try {
             System.gc();

@@ -184,8 +184,9 @@ class CodeViewerActivity : Activity() {
                 .asSequence()
                 .mapNotNull { Session.jadxCache[it] }
                 .firstOrNull()
-            code.text = text
-                ?: "(sin Java para ${shortName(sel)} — caché: ${Session.jadxCache.size})"
+            code.text = text ?: ("(sin Java para ${shortName(sel)}"
+                + " — caché: ${Session.jadxCache.size}"
+                + (Session.jadxError?.let { " — error: $it" } ?: "") + ")")
         }
     }
 
@@ -348,6 +349,7 @@ class CodeViewerActivity : Activity() {
                 fail = t.message
                 Session.jadxDone = true
             } finally {
+                Session.jadxError = res?.error ?: fail
                 runOnUiThread {
                     markWorking(false)
                     btnStop.isEnabled = false

@@ -196,6 +196,22 @@ public class JadxAdapterTest {
     }
 
     @Test(timeout = 180000)
+    public void apkDexCorruptoRescataOtro() throws Exception {
+        File apk = new File(tmp.getRoot(), "mix.apk");
+        ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(apk));
+        zos.putNextEntry(new ZipEntry("classes.dex"));
+        zos.write(new byte[]{9, 9, 9, 9, 9, 9, 9, 9});
+        zos.closeEntry();
+        zos.putNextEntry(new ZipEntry("classes2.dex"));
+        zos.write(SmaliExtractTest.buildTestDex());
+        zos.closeEntry();
+        zos.close();
+        JadxAdapter.Result r = JadxAdapter.decompileFiltered(apk, tmp.getRoot(), 1,
+                new ArrayList<String>(), 10, null);
+        assertTrue("rescatada: " + r.error, r.sources.containsKey("com.x.A"));
+    }
+
+    @Test(timeout = 180000)
     public void apkSinDexVacioSinLanzar() throws Exception {
         File apk = new File(tmp.getRoot(), "vacio.apk");
         ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(apk));

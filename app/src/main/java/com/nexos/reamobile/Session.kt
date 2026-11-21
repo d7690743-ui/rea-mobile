@@ -15,6 +15,7 @@ object Session {
     var jadxErrors = 0
     var jadxTruncated = false
     var jadxDone = false
+    var jadxError: String? = null
 
     fun pkgSlash(): String = if (pkg == "?") "?/" else pkg.replace('.', '/') + "/"
 
@@ -26,5 +27,6 @@ object Session {
         jadxErrors = 0
         jadxTruncated = false
         jadxDone = false
+        jadxError = null
     }
 }
