@@ -18,15 +18,16 @@ public final class SmaliDumper {
     public static final int MAX_UNITS_PER_METHOD = 6000;
     public static final long MAX_TOTAL_BYTES = 40L * 1024 * 1024;
 
-    private static final int F10x = 0, F12x = 1, F11n = 2, F11x = 3, F10t = 4, F20t = 5,
+    // Visibles en el paquete para IrBuilder (Fase 3). Sin cambio de conducta.
+    static final int F10x = 0, F12x = 1, F11n = 2, F11x = 3, F10t = 4, F20t = 5,
             F22x = 6, F21t = 7, F22t = 8, F21s = 9, F21h = 10, F21lh = 11, F21c = 12,
             F22s = 13, F22b = 14, F23x = 15, F22c = 16, F32x = 17, F31i = 18, F31t = 19,
             F31c = 20, F35c = 21, F3rc = 22, F45cc = 23, F4rcc = 24, F51l = 25, F30t = 26, F00 = 27;
-    private static final int R_NONE = 0, R_STR = 1, R_TYPE = 2, R_FIELD = 3, R_METHOD = 4, R_RAW = 5;
+    static final int R_NONE = 0, R_STR = 1, R_TYPE = 2, R_FIELD = 3, R_METHOD = 4, R_RAW = 5;
 
-    private static final String[] NAMES = new String[256];
-    private static final byte[] FORMATS = new byte[256];
-    private static final byte[] REFS = new byte[256];
+    static final String[] NAMES = new String[256];
+    static final byte[] FORMATS = new byte[256];
+    static final byte[] REFS = new byte[256];
 
     private static final String TABLE =
             "00=nop:00,01=move:12x,02=move/from16:22x,03=move/16:32x,04=move-wide:12x,"
@@ -472,7 +473,7 @@ public final class SmaliDumper {
         return count;
     }
 
-    private static int insnSize(int fmt, int[] units, int p, int n) {
+    static int insnSize(int fmt, int[] units, int p, int n) {
         switch (fmt) {
             case F10x:
             case F12x:
@@ -517,7 +518,7 @@ public final class SmaliDumper {
      * (0x0100 packed, 0x0200 sparse, 0x0300 array). Un switch de tamaño 0
      * no existe en dex real: se trata como nop para evitar falsos positivos.
      */
-    private static int payloadSize(int[] units, int p, int n) {
+    static int payloadSize(int[] units, int p, int n) {
         if (p >= n) return 1;
         int u0 = units[p];
         try {
@@ -547,7 +548,7 @@ public final class SmaliDumper {
         return 1;
     }
 
-    private static int branchTarget(int fmt, int[] units, int p, int op) {
+    static int branchTarget(int fmt, int[] units, int p, int op) {
         try {
             switch (fmt) {
                 case F10t:

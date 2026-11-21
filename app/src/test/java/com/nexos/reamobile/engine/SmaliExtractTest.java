@@ -78,9 +78,21 @@ public class SmaliExtractTest {
         // sparse: size en units[p+1]; regresión: leía units[p+2] (55137=0xD761)
         assertTrue(smali, smali.contains("# sparse-switch: size=2"));
         assertTrue(smali, smali.contains("#   0x82b1d761 -> +0x3 (raw)"));
-        assertTrue(smali, smali.contains("#   0x5 -> +0x1 (raw)"));
+        assertTrue(smali, smali.contains("#   0x5 -> +0x3 (raw)"));
         assertTrue(smali, smali.contains("# packed-switch: size=3 first_key=0xa"));
         assertTrue(smali, smali.contains("#   0xa -> +0x1 (raw)"));
+    }
+
+    @Test
+    public void ramaIfGoto() {
+        List<byte[]> dexes = new ArrayList<>();
+        dexes.add(buildTestDex());
+        String smali = SmaliDumper.dumpSingleClass(dexes, "Lcom/x/A;");
+        assertNotNull(smali);
+        assertTrue(smali, smali.contains(".method public static br()V"));
+        assertTrue(smali, smali.contains("if-eqz v0, :L0004"));
+        assertTrue(smali, smali.contains("const/4 v0, 0x1"));
+        assertTrue(smali, smali.contains("goto :L0004"));
     }
 
     @Test
@@ -100,9 +112,9 @@ public class SmaliExtractTest {
         zos.closeEntry();
     }
 
-    /** DEX mínimo: 1 clase Lcom/x/A; con foo(), bar(), sw() y pk(). Con mapa válido. */
+    /** DEX mínimo: 1 clase Lcom/x/A; con foo(), bar(), sw(), pk() y br(). Con mapa válido. */
     static byte[] buildTestDex() {
-        String[] strs = {"Lcom/x/A;", "Ljava/lang/Object;", "foo", "A.java", "V", "bar", "hello", "sw", "pk"};
+        String[] strs = {"Lcom/x/A;", "Ljava/lang/Object;", "foo", "A.java", "V", "bar", "hello", "sw", "pk", "br"};
         DexBuilder d = new DexBuilder();
         d.bytes(new byte[]{'d', 'e', 'x', '\n', '0', '3', '5', 0});
         d.u32(0);
@@ -126,7 +138,7 @@ public class SmaliExtractTest {
         d.u32(0);
         d.u32(0);
         d.u32(0);
-        d.u32(4);
+        d.u32(5);
         int pMethOff = d.pos;
         d.u32(0);
         d.u32(1);
@@ -167,6 +179,9 @@ public class SmaliExtractTest {
         d.u16(0);
         d.u16(0);
         d.u32(8);
+        d.u16(0);
+        d.u16(0);
+        d.u32(9);
         int clsDefsOff = d.pos;
         d.setU32(pClsOff, clsDefsOff);
         d.u32(0);
@@ -232,7 +247,7 @@ public class SmaliExtractTest {
         d.u16(0x0000);
         d.u16(0x0003);
         d.u16(0x0000);
-        d.u16(0x0001);
+        d.u16(0x0003);
         d.u16(0x0000);
         // pk: packed-switch v0,+4; return-void; payload size=3 first=10
         d.align();
@@ -257,11 +272,25 @@ public class SmaliExtractTest {
         d.u16(0x0000);
         d.u16(0x0003);
         d.u16(0x0000);
+        // br: if-eqz v0,+4; const/4 v0,1; goto +1; return-void
+        d.align();
+        int code4 = d.pos;
+        d.u16(1);
+        d.u16(0);
+        d.u16(0);
+        d.u16(0);
+        d.u32(0);
+        d.u32(5);
+        d.u16(0x0038);
+        d.u16(0x0004);
+        d.u16(0x1012);
+        d.u16(0x0128);
+        d.u16(0x000e);
         int cd = d.pos;
         d.setU32(pClassData, cd);
         d.uleb(0);
         d.uleb(0);
-        d.uleb(4);
+        d.uleb(5);
         d.uleb(0);
         d.uleb(0);
         d.uleb(0x9);
@@ -275,6 +304,9 @@ public class SmaliExtractTest {
         d.uleb(1);
         d.uleb(0x9);
         d.uleb(code3);
+        d.uleb(1);
+        d.uleb(0x9);
+        d.uleb(code4);
         // map_list ordenado por tipo, alineado a 4
         d.align();
         int mapOff = d.pos;
@@ -284,11 +316,11 @@ public class SmaliExtractTest {
         d.mapItem(0x0001, strs.length, strIdsOff);
         d.mapItem(0x0002, 3, typeIdsOff);
         d.mapItem(0x0003, 1, protoIdsOff);
-        d.mapItem(0x0005, 4, methIdsOff);
+        d.mapItem(0x0005, 5, methIdsOff);
         d.mapItem(0x0006, 1, clsDefsOff);
         d.mapItem(0x1000, 1, mapOff);
         d.mapItem(0x2000, 1, cd);
-        d.mapItem(0x2001, 4, code0);
+        d.mapItem(0x2001, 5, code0);
         d.mapItem(0x2002, strs.length, firstStrData);
         d.setU32(pDataSize, d.pos - dataOff);
         d.setU32(pFileSize, d.pos);
