@@ -196,6 +196,32 @@ public final class SmaliDumper {
         return r;
     }
 
+    /** Desensambla una sola clase (descriptor estilo "Lcom/x/A;") o null. */
+    public static String dumpSingleClass(List<byte[]> dexes, String classDesc) {
+        if (dexes == null || classDesc == null) return null;
+        for (byte[] dex : dexes) {
+            try {
+                if (dex == null || dex.length < 0x70) continue;
+                Tables t = buildTables(dex);
+                int classN = u32(dex, 96);
+                int classOff = u32(dex, 100);
+                if (classN < 0 || classN > 500000) continue;
+                for (int i = 0; i < classN; i++) {
+                    int p = classOff + i * 32;
+                    if (p + 32 > dex.length) break;
+                    String cls = typeAt(t, u32(dex, p));
+                    if (!classDesc.equals(cls)) continue;
+                    DumpResult tmp = new DumpResult();
+                    return dumpClass(dex, t, tmp, cls, u32(dex, p + 4), u32(dex, p + 8),
+                            u32(dex, p + 16), u32(dex, p + 24));
+                }
+            } catch (RuntimeException e) {
+                // prueba con el siguiente dex
+            }
+        }
+        return null;
+    }
+
     private static void dumpOne(byte[] dex, String filterSlash, DumpResult r,
                                 Map<String, Integer> prefixCount) {
         if (dex == null || dex.length < 0x70 || dex[0] != 'd' || dex[1] != 'e' || dex[2] != 'x') {

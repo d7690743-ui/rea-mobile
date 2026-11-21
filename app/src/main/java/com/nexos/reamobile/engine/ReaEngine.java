@@ -89,6 +89,8 @@ public final class ReaEngine {
         public int manifestProviders;
         public int arscStringCount;
         public boolean arscTruncated;
+        public List<String> appClasses = new ArrayList<>();
+        public int appClassTotal;
         public int urlTotal;
         public int ipTotal;
         public int emailTotal;
@@ -127,6 +129,7 @@ public final class ReaEngine {
             sb.append("strings=").append(totalStrings).append(" clases=").append(totalClasses)
                     .append(" metodos=").append(totalMethods).append('\n');
             sb.append("ofuscacionRatio=").append(String.format(Locale.US, "%.2f", obfuscatedRatio)).append('\n');
+            sb.append("clasesPropias=").append(appClassTotal).append('\n');
             sb.append("api=").append(apiStats).append('\n');
             sb.append("nativas=").append(nativeLibs).append('\n');
             sb.append("frameworks=").append(frameworks).append('\n');
@@ -356,6 +359,13 @@ public final class ReaEngine {
                     obfWeighted += (long) (di.obfuscatedRatio * di.classCount);
                     obfTotal += di.classCount;
                     mergeStats(r.apiStats, di.apiStats);
+                    String slash = "L" + r.packageName.replace('.', '/') + "/";
+                    for (DexParser.ClassInfo ci : di.classes) {
+                        if (ci.name != null && !"?".equals(r.packageName) && ci.name.startsWith(slash)) {
+                            r.appClassTotal++;
+                            if (r.appClasses.size() < 5000) r.appClasses.add(ci.name);
+                        }
+                    }
                     if (di.hasKotlin) frameworks.add("Kotlin");
                     if (di.hasAndroidx) frameworks.add("AndroidX/Jetpack");
                     if (di.hasGms) frameworks.add("Google/GMS");
@@ -741,6 +751,21 @@ public final class ReaEngine {
                     StringBuilder as = new StringBuilder("total=" + arscTotal + "\n");
                     for (String s : arscStrings) as.append(s.replace('\n', ' ')).append('\n');
                     putText(zos, "rea/INDICIOS_strings_arsc.txt", as.toString());
+                    List<String> slashes = new ArrayList<>();
+                    if (!"?".equals(pkg)) slashes.add(pkgSlash);
+                    try {
+                        File wd = outZip.getParentFile() != null ? outZip.getParentFile() : new File(".");
+                        JadxAdapter.Result jr = JadxAdapter.decompileFiltered(
+                                apk, wd, 2, slashes, 300, null);
+                        for (Map.Entry<String, String> e : jr.sources.entrySet()) {
+                            putText(zos, "rea/JAVA/" + e.getKey().replace('.', '/') + ".java", e.getValue());
+                        }
+                        r.notes.add("java: " + jr.sources.size() + " clases, errores=" + jr.errors);
+                        if (jr.truncated) r.notes.add("java: recortado por topes");
+                        if (jr.error != null) r.notes.add("java: " + jr.error);
+                    } catch (Exception ex) {
+                        r.notes.add("java: no disponible");
+                    }
                     ApkReport rep = analyze(apk);
                     putText(zos, "rea/INFORME.txt", rep.toText());
                     StringBuilder xs = new StringBuilder();

@@ -30,6 +30,7 @@ class MainActivity : Activity() {
     private lateinit var btnPick: Button
     private lateinit var btnShare: Button
     private lateinit var btnExtract: Button
+    private lateinit var btnView: Button
     private lateinit var progress: ProgressBar
     private var lastReport: String = ""
     private var lastApk: File? = null
@@ -55,6 +56,10 @@ class MainActivity : Activity() {
             text = "Extraer ZIP (árbol + smali)"
             isEnabled = false
         }
+        btnView = Button(this).apply {
+            text = "Ver código"
+            isEnabled = false
+        }
         progress = ProgressBar(this).apply { visibility = View.GONE }
         val scroll = ScrollView(this)
         txt = TextView(this).apply {
@@ -70,6 +75,7 @@ class MainActivity : Activity() {
         root.addView(btnPick)
         root.addView(btnShare)
         root.addView(btnExtract)
+        root.addView(btnView)
         root.addView(progress)
         root.addView(
             scroll,
@@ -80,6 +86,7 @@ class MainActivity : Activity() {
         btnPick.setOnClickListener { if (!analyzing) openPicker() }
         btnShare.setOnClickListener { shareReport() }
         btnExtract.setOnClickListener { extractZip() }
+        btnView.setOnClickListener { openViewer() }
         showDisclaimerOnce()
     }
 
@@ -130,6 +137,7 @@ class MainActivity : Activity() {
         analyzing = true
         btnShare.isEnabled = false
         btnExtract.isEnabled = false
+        btnView.isEnabled = false
         progress.visibility = View.VISIBLE
         txt.text = "Analizando…"
         Thread {
@@ -143,9 +151,15 @@ class MainActivity : Activity() {
                 lastReport = report.toText() + "\n" + pmSection
                 runOnUiThread {
                     lastApk = tmp
+                    Session.apk = tmp
+                    Session.pkg = report.packageName
+                    Session.appClasses = report.appClasses
+                    Session.appClassTotal = report.appClassTotal
+                    Session.resetCache()
                     txt.text = lastReport
                     btnShare.isEnabled = true
                     btnExtract.isEnabled = true
+                    btnView.isEnabled = true
                     progress.visibility = View.GONE
                 }
             } catch (e: Exception) {
@@ -191,6 +205,7 @@ class MainActivity : Activity() {
                     btnPick.isEnabled = true
                     btnShare.isEnabled = lastReport.isNotEmpty()
                     btnExtract.isEnabled = lastApk != null
+                    btnView.isEnabled = lastApk != null
                 }
             }
         }.start()
@@ -278,6 +293,11 @@ class MainActivity : Activity() {
     private fun sha256(bytes: ByteArray): String {
         val md = MessageDigest.getInstance("SHA-256").digest(bytes)
         return md.joinToString("") { "%02X".format(it) }
+    }
+
+    private fun openViewer() {
+        if (analyzing || lastApk == null) return
+        startActivity(Intent(this, CodeViewerActivity::class.java))
     }
 
     private fun shareReport() {

@@ -69,6 +69,17 @@ public class SmaliExtractTest {
         zf.close();
     }
 
+    @Test
+    public void unaSolaClase() {
+        List<byte[]> dexes = new ArrayList<>();
+        dexes.add(buildTestDex());
+        String smali = SmaliDumper.dumpSingleClass(dexes, "Lcom/x/A;");
+        assertNotNull(smali);
+        assertTrue(smali, smali.contains(".class public Lcom/x/A;"));
+        assertTrue(smali, smali.contains("const-string v0, \"hello\""));
+        assertNull(SmaliDumper.dumpSingleClass(dexes, "Lno/Existe;"));
+    }
+
     static void put(ZipOutputStream zos, String name, byte[] data) throws Exception {
         zos.putNextEntry(new ZipEntry(name));
         zos.write(data);

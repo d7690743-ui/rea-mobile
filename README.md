@@ -5,6 +5,15 @@ Análisis estático de APK 100% on-device, inspirado en
 solo-Android [REA-ReverseEngineerAndroid](https://github.com/Hubupup/REA-ReverseEngineerAndroid).
 Código del motor escrito desde cero en Java/Kotlin; sin dependencias externas.
 
+## Novedades v0.3
+
+- Adaptador JADX por lotes: filtro por paquete, tope de clases y progreso
+  cancelable (`JadxAdapter.decompileFiltered`).
+- Extracción incluye `rea/JAVA/` con las clases propias descompiladas.
+- Visor de código: explorador de clases, pestañas Smali/Java, búsqueda en
+  lista y en código, exportación e indicador de confianza.
+- Plan del motor propio en `docs/FASE3_MOTOR_PROPIO.md` (por fases, con tests).
+
 ## Novedades v0.2
 
 - Smali on-device de las clases propias (desensamblador Dalvik propio, best-effort).

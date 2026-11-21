@@ -1,6 +1,7 @@
 package com.nexos.reamobile.engine;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -11,22 +12,37 @@ import jadx.plugins.input.dex.DexInputPlugin;
 
 /**
  * Adaptador fino sobre jadx-core (Apache 2.0): DEX/APK a Java por clase.
- * Spike v0.3: sin UI y sin cancelación (llegan con el visor).
- * Llamar fuera del hilo principal: puede tardar segundos o minutos.
+ * Carga una vez y extrae por lotes con filtro de paquete, tope de clases
+ * y cancelación cooperativa. Llamar fuera del hilo principal.
  */
 public final class JadxAdapter {
     private JadxAdapter() {
+    }
+
+    /** Se llama por cada clase extraída; devolver false detiene (trunca). */
+    public interface Progress {
+        boolean onClass(int done, int matched);
     }
 
     public static class Result {
         public Map<String, String> sources = new LinkedHashMap<>();
         public int errors;
         public int classes;
+        public boolean truncated;
         public String error;
     }
 
-    /** Descompila un dex o apk y devuelve el código por clase. Nunca lanza. */
+    /** Descompila todo el dex/apk sin filtro. Nunca lanza. */
     public static Result decompile(File input, File workDir, int threads) {
+        return decompileFiltered(input, workDir, threads, new ArrayList<String>(), 0, null);
+    }
+
+    /**
+     * Descompila con filtro de paquetes (prefijos estilo "com/x/"), tope de
+     * clases (0 = sin tope) y progreso cancelable. Nunca lanza.
+     */
+    public static Result decompileFiltered(File input, File workDir, int threads,
+                                           List<String> pkgSlashes, int maxClasses, Progress progress) {
         Result r = new Result();
         JadxDecompiler jadx = null;
         try {
@@ -38,6 +54,7 @@ public final class JadxAdapter {
                 r.error = "sin directorio de trabajo";
                 return r;
             }
+            int cap = maxClasses <= 0 ? Integer.MAX_VALUE : maxClasses;
             File outDir = new File(workDir, "jadx-out");
             File srcDir = new File(outDir, "src");
             File resDir = new File(outDir, "res");
@@ -55,11 +72,44 @@ public final class JadxAdapter {
             jadx.load();
             List<JavaClass> classes = jadx.getClassesWithInners();
             r.classes = classes.size();
+            int matched = 0;
             for (JavaClass cls : classes) {
+                String slash;
+                try {
+                    slash = cls.getFullName().replace('.', '/');
+                } catch (Exception e) {
+                    continue;
+                }
+                boolean ok = pkgSlashes == null || pkgSlashes.isEmpty();
+                if (!ok) {
+                    for (String p : pkgSlashes) {
+                        if (p != null && slash.startsWith(p)) {
+                            ok = true;
+                            break;
+                        }
+                    }
+                }
+                if (!ok) continue;
+                matched++;
+                if (r.sources.size() >= cap) {
+                    r.truncated = true;
+                    break;
+                }
                 try {
                     r.sources.put(cls.getFullName(), cls.getCode());
                 } catch (Exception e) {
                     r.errors++;
+                }
+                if (progress != null) {
+                    try {
+                        if (!progress.onClass(r.sources.size(), matched)) {
+                            r.truncated = true;
+                            break;
+                        }
+                    } catch (Exception e) {
+                        r.truncated = true;
+                        break;
+                    }
                 }
             }
             r.errors += jadx.getErrorsCount();
