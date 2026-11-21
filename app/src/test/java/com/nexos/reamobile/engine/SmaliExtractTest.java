@@ -8,8 +8,10 @@ import static org.junit.Assert.assertTrue;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.zip.Adler32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -73,7 +75,7 @@ public class SmaliExtractTest {
         zos.closeEntry();
     }
 
-    /** DEX mínimo: 1 clase Lcom/x/A; con foo() y bar(). */
+    /** DEX mínimo: 1 clase Lcom/x/A; con foo() y bar(). Con mapa válido. */
     static byte[] buildTestDex() {
         String[] strs = {"Lcom/x/A;", "Ljava/lang/Object;", "foo", "A.java", "V", "bar", "hello"};
         DexBuilder d = new DexBuilder();
@@ -86,6 +88,7 @@ public class SmaliExtractTest {
         d.u32(0x12345678);
         d.u32(0);
         d.u32(0);
+        int pMapOff = d.pos;
         d.u32(0);
         d.u32(strs.length);
         int pStrOff = d.pos;
@@ -108,28 +111,33 @@ public class SmaliExtractTest {
         d.u32(0);
         int pDataOff = d.pos;
         d.u32(0);
-        d.setU32(pStrOff, d.pos);
+        int strIdsOff = d.pos;
+        d.setU32(pStrOff, strIdsOff);
         int[] strIdPos = new int[strs.length];
         for (int i = 0; i < strs.length; i++) {
             strIdPos[i] = d.pos;
             d.u32(0);
         }
-        d.setU32(pTypeOff, d.pos);
+        int typeIdsOff = d.pos;
+        d.setU32(pTypeOff, typeIdsOff);
         d.u32(0);
         d.u32(1);
         d.u32(4);
-        d.setU32(pProtoOff, d.pos);
+        int protoIdsOff = d.pos;
+        d.setU32(pProtoOff, protoIdsOff);
         d.u32(4);
         d.u32(2);
         d.u32(0);
-        d.setU32(pMethOff, d.pos);
+        int methIdsOff = d.pos;
+        d.setU32(pMethOff, methIdsOff);
         d.u16(0);
         d.u16(0);
         d.u32(2);
         d.u16(0);
         d.u16(0);
         d.u32(5);
-        d.setU32(pClsOff, d.pos);
+        int clsDefsOff = d.pos;
+        d.setU32(pClsOff, clsDefsOff);
         d.u32(0);
         d.u32(1);
         d.u32(1);
@@ -141,6 +149,7 @@ public class SmaliExtractTest {
         d.u32(0);
         int dataOff = d.pos;
         d.setU32(pDataOff, dataOff);
+        int firstStrData = d.pos;
         for (int i = 0; i < strs.length; i++) {
             d.setU32(strIdPos[i], d.pos);
             byte[] sb = strs[i].getBytes(StandardCharsets.UTF_8);
@@ -149,6 +158,7 @@ public class SmaliExtractTest {
             d.u8(0); // string_data_item termina en 0x00 como en un dex real
         }
         // foo: const-string v0, "hello"; return-void
+        d.align();
         int code0 = d.pos;
         d.u16(1);
         d.u16(0);
@@ -159,9 +169,10 @@ public class SmaliExtractTest {
         d.u16(0x001a);
         d.u16(6);
         d.u16(0x000e);
-        // bar: goto +1; return-void
+        // bar: goto +1; return-void (1 registro: this al ser instancia)
+        d.align();
         int code1 = d.pos;
-        d.u16(0);
+        d.u16(1);
         d.u16(0);
         d.u16(0);
         d.u16(0);
@@ -181,9 +192,24 @@ public class SmaliExtractTest {
         d.uleb(1);
         d.uleb(0x1);
         d.uleb(code1);
+        // map_list ordenado por tipo, alineado a 4
+        d.align();
+        int mapOff = d.pos;
+        d.setU32(pMapOff, mapOff);
+        d.u32(10);
+        d.mapItem(0x0000, 1, 0);
+        d.mapItem(0x0001, strs.length, strIdsOff);
+        d.mapItem(0x0002, 3, typeIdsOff);
+        d.mapItem(0x0003, 1, protoIdsOff);
+        d.mapItem(0x0005, 2, methIdsOff);
+        d.mapItem(0x0006, 1, clsDefsOff);
+        d.mapItem(0x1000, 1, mapOff);
+        d.mapItem(0x2000, 1, cd);
+        d.mapItem(0x2001, 2, code0);
+        d.mapItem(0x2002, strs.length, firstStrData);
         d.setU32(pDataSize, d.pos - dataOff);
         d.setU32(pFileSize, d.pos);
-        return d.trim();
+        return d.finish();
     }
 
     static class DexBuilder {
@@ -220,6 +246,17 @@ public class SmaliExtractTest {
             } while (v != 0);
         }
 
+        void align() {
+            while ((pos & 3) != 0) u8(0);
+        }
+
+        void mapItem(int type, int size, int off) {
+            u16(type);
+            u16(0);
+            u32(size);
+            u32(off);
+        }
+
         void setU32(int at, int v) {
             b[at] = (byte) v;
             b[at + 1] = (byte) (v >> 8);
@@ -231,6 +268,21 @@ public class SmaliExtractTest {
             byte[] o = new byte[pos];
             System.arraycopy(b, 0, o, 0, pos);
             return o;
+        }
+
+        /** Calcula firma SHA-1 y checksum Adler-32 como en un dex real. */
+        byte[] finish() {
+            try {
+                MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
+                sha1.update(b, 32, pos - 32);
+                System.arraycopy(sha1.digest(), 0, b, 12, 20);
+                Adler32 adler = new Adler32();
+                adler.update(b, 12, pos - 12);
+                setU32(8, (int) adler.getValue());
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+            return trim();
         }
     }
 }

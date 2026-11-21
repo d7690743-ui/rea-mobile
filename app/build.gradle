@@ -45,6 +45,9 @@ android {
 
 // Cero dependencias en la app: 100% framework + motor REA en Java puro.
 // Solo JUnit para el test unitario puro (SmaliExtractTest).
+// JADX (Apache 2.0, ver README): solo core + entrada dex, sin GUI ni CLI.
 dependencies {
+    implementation 'io.github.skylot:jadx-core:1.5.2'
+    implementation 'io.github.skylot:jadx-dex-input:1.5.2'
     testImplementation 'junit:junit:4.13.2'
 }
