@@ -196,6 +196,25 @@ public class JadxAdapterTest {
     }
 
     @Test(timeout = 180000)
+    public void anonimaResuelvePorNombreRaw() throws Exception {
+        File dex = new File(tmp.getRoot(), "t.dex");
+        Files.write(dex.toPath(), SmaliExtractTest.buildTestDexWithInner());
+        List<String> pref = new ArrayList<>();
+        pref.add("com/x/");
+        JadxAdapter.Result r = JadxAdapter.decompileFiltered(dex, tmp.getRoot(), 1, pref, 10, null);
+        assertNull(r.error);
+        assertTrue("claves=" + r.sources.keySet(), r.sources.containsKey("com.x.A$1"));
+        // Búsqueda tal como la hace el visor: por descriptor smali.
+        for (String desc : new String[]{"Lcom/x/A;", "Lcom/x/A$1;"}) {
+            boolean ok = false;
+            for (String c : JadxAdapter.candidateKeys(desc)) {
+                if (r.sources.containsKey(c)) ok = true;
+            }
+            assertTrue("lookup visor para " + desc, ok);
+        }
+    }
+
+    @Test(timeout = 180000)
     public void apkDexCorruptoRescataOtro() throws Exception {
         File apk = new File(tmp.getRoot(), "mix.apk");
         ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(apk));

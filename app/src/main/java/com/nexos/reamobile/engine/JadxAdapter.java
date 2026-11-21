@@ -91,8 +91,9 @@ public final class JadxAdapter {
 
     /**
      * Claves candidatas en Result.sources para un descriptor smali.
-     * JADX nombra inners con puntos (a.b.C.D) y el smali con $ (a/b/C$D):
-     * se prueban exacta, último $→punto y todos $→punto. Nunca lanza.
+     * Las claves son el nombre raw del dex (a.b.C$D): la exacta suele
+     * acertar; las variantes con puntos cubren el repliegue a getFullName
+     * si el raw no está disponible. Nunca lanza.
      */
     public static List<String> candidateKeys(String smaliDesc) {
         List<String> out = new ArrayList<>();
@@ -187,12 +188,9 @@ public final class JadxAdapter {
             int checked = 0;
             long chars = 0;
             for (JavaClass cls : classes) {
-                String slash;
-                try {
-                    slash = cls.getFullName().replace('.', '/');
-                } catch (Throwable t) {
-                    continue;
-                }
+                String key = clsKey(cls);
+                if (key == null) continue;
+                String slash = key.replace('.', '/');
                 boolean ok = pkgSlashes == null || pkgSlashes.isEmpty();
                 if (!ok) {
                     for (String p : pkgSlashes) {
@@ -237,7 +235,9 @@ public final class JadxAdapter {
                         break;
                     }
                     try {
-                        r.sources.put(cls.getFullName(), code);
+                        String storeKey = clsKey(cls);
+                        if (storeKey == null) r.errors++;
+                        else r.sources.put(storeKey, code);
                     } catch (Throwable t) {
                         r.errors++;
                     }
@@ -337,12 +337,27 @@ public final class JadxAdapter {
         }
     }
 
-    private static String clsName(JavaClass cls) {
+    /**
+     * Nombre original del dex (con $): inmune a renombres de JADX
+     * (p.ej. A$1 → A.AnonymousClass1). Repliega a getFullName.
+     * Null solo si la clase no da ningún nombre. Nunca lanza.
+     */
+    private static String clsKey(JavaClass cls) {
+        try {
+            String raw = cls.getRawName();
+            if (raw != null && !raw.isEmpty()) return raw;
+        } catch (Throwable ignored) {
+        }
         try {
             return cls.getFullName();
         } catch (Throwable t) {
-            return "?";
+            return null;
         }
+    }
+
+    private static String clsName(JavaClass cls) {
+        String k = clsKey(cls);
+        return k != null ? k : "?";
     }
 
     /**
