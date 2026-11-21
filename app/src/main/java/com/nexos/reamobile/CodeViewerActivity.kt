@@ -6,6 +6,8 @@ import android.content.ContentValues
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.view.View
 import android.widget.AdapterView
@@ -18,6 +20,7 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import com.nexos.reamobile.engine.JadxAdapter
+import com.nexos.reamobile.engine.JavaHarvest
 import com.nexos.reamobile.engine.SmaliDumper
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -40,6 +43,10 @@ class CodeViewerActivity : Activity() {
     private lateinit var btnStop: Button
     private lateinit var btnExport: Button
     private lateinit var btnLog: Button
+    private lateinit var btnZip: Button
+    private var lastFindQuery = ""
+    private var lastFindMatches: List<JavaHarvest.Hit> = emptyList()
+    private var lastFindIdx = -1
     private lateinit var progress: ProgressBar
     private var filtered: List<String> = emptyList()
     private var selected: String? = null
@@ -47,6 +54,14 @@ class CodeViewerActivity : Activity() {
     private var showingLog = false
     private var working = false
     @Volatile private var stopRequested = false
+    private var seenSeq = 0
+    private val tickHandler = Handler(Looper.getMainLooper())
+    private val ticker = object : Runnable {
+        override fun run() {
+            tickForeign()
+            tickHandler.postDelayed(this, 500)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,11 +107,13 @@ class CodeViewerActivity : Activity() {
         codeSearch = EditText(this).apply { hint = "buscar en código…" }
         val btnFind = Button(this).apply { text = "Buscar" }
         btnExport = Button(this).apply { text = "Exportar" }
+        btnZip = Button(this).apply { text = "Zip" }
         val rowFind = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(codeSearch, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(btnFind)
             addView(btnExport)
+            addView(btnZip)
         }
         progress = ProgressBar(this).apply { visibility = View.GONE }
         val scroll = ScrollView(this)
@@ -126,6 +143,7 @@ class CodeViewerActivity : Activity() {
         btnStop.setOnClickListener { stopRequested = true }
         btnLog.setOnClickListener { toggleLog() }
         btnExport.setOnClickListener { exportCurrent() }
+        btnZip.setOnClickListener { exportJavaZip() }
         list.onItemClickListener =
             AdapterView.OnItemClickListener { _, _, pos, _ ->
                 if (pos in filtered.indices) selectClass(filtered[pos])
@@ -134,6 +152,31 @@ class CodeViewerActivity : Activity() {
         refreshList(Session.appClasses)
         updateStatus("Cargando dex…")
         loadDex(apk)
+        seenSeq = Session.jadxSeq
+    }
+
+    override fun onResume() {
+        super.onResume()
+        tickHandler.post(ticker)
+    }
+
+    override fun onPause() {
+        tickHandler.removeCallbacks(ticker)
+        super.onPause()
+    }
+
+    /** Sincroniza con descompilaciones de otra instancia: progreso vivo y refresco final. */
+    private fun tickForeign() {
+        if (working) return
+        if (Session.jadxRunning) updateStatus(Session.jadxProgressMsg.ifEmpty { "descompilando…" })
+        if (Session.jadxSeq == seenSeq) return
+        seenSeq = Session.jadxSeq
+        refreshList(filtered)
+        if (!showingLog && !modeSmali) {
+            selectFirstWithJava()
+            showCode()
+        }
+        updateStatus()
     }
 
     override fun onDestroy() {
@@ -150,8 +193,19 @@ class CodeViewerActivity : Activity() {
     private fun refreshList(items: List<String>) {
         filtered = items
         adapter.clear()
-        adapter.addAll(items.map { shortName(it) })
+        val mark = Session.jadxDone
+        adapter.addAll(items.map {
+            (if (mark) (if (JadxAdapter.hasJava(it, Session.jadxCache)) "● " else "○ ") else "") +
+                shortName(it)
+        })
         adapter.notifyDataSetChanged()
+    }
+
+    /** Si la selección actual no tiene Java, salta a la primera que sí. */
+    private fun selectFirstWithJava() {
+        val sel = selected
+        if (sel != null && JadxAdapter.hasJava(sel, Session.jadxCache)) return
+        JadxAdapter.firstWithJava(filtered, Session.jadxCache)?.let { selected = it }
     }
 
     private fun shortName(desc: String): String =
@@ -197,13 +251,34 @@ class CodeViewerActivity : Activity() {
                 dumpSingle(sel)
             }
         } else {
-            val text = JadxAdapter.candidateKeys(sel)
+            var text = JadxAdapter.candidateKeys(sel)
                 .asSequence()
                 .mapNotNull { Session.jadxCache[it] }
                 .firstOrNull()
-            code.text = text ?: ("(sin Java para ${shortName(sel)}"
-                + " — caché: ${Session.jadxCache.size}"
-                + (Session.jadxError?.let { " — error: $it" } ?: "") + ")")
+            // Inners vacías (lambdas, R$*): van incluidas en la externa.
+            var viaOuter: String? = null
+            if (text.isNullOrBlank()) {
+                outer@ for (k in JadxAdapter.candidateKeys(sel)) {
+                    for (ok in JadxAdapter.outerKeys(k)) {
+                        val t = Session.jadxCache[ok]
+                        if (!t.isNullOrBlank()) {
+                            text = t
+                            viaOuter = ok
+                            break@outer
+                        }
+                    }
+                }
+            }
+            if (!text.isNullOrBlank()) {
+                code.text = (if (viaOuter != null) "// (esta clase va incluida en $viaOuter)\n\n" else "") + text
+            } else if (working || Session.jadxRunning) {
+                val prog = Session.jadxProgressMsg.ifEmpty { "descompilando…" }
+                code.text = "(descompilando… $prog — la vista se actualizará sola)"
+            } else {
+                code.text = ("(sin Java para ${shortName(sel)}"
+                    + " — caché: ${Session.jadxCache.size}"
+                    + (Session.jadxError?.let { " — error: $it" } ?: "") + ")")
+            }
         }
     }
 
@@ -330,6 +405,8 @@ class CodeViewerActivity : Activity() {
         btnStop.isEnabled = true
         progress.visibility = View.VISIBLE
         updateStatus("Descompilando con JADX…")
+        Session.jadxRunning = true
+        Session.jadxProgressMsg = "iniciando…"
         Thread {
             val prefixes = if (Session.pkg == "?") emptyList() else listOf(Session.pkgSlash())
             var fail: String? = null
@@ -339,14 +416,23 @@ class CodeViewerActivity : Activity() {
                 // dumpSingle los recarga bajo demanda con ensureDex().
                 Session.dexBytes = emptyList()
                 System.gc()
-                res = JadxAdapter.decompileFiltered(apk, cacheDir, 2, prefixes, 300,
+                val heap = try {
+                    Runtime.getRuntime().maxMemory()
+                } catch (t: Throwable) {
+                    256L * 1024 * 1024
+                }
+                res = JadxAdapter.decompileFiltered(apk, cacheDir,
+                    JadxAdapter.recommendedThreads(heap), prefixes,
+                    JadxAdapter.recommendedCap(heap),
                     object : JadxAdapter.Progress {
                         override fun onClass(done: Int, matched: Int): Boolean {
+                            Session.jadxProgressMsg = "JADX $done clases…"
                             runOnUiThread { updateStatus("JADX $done clases…") }
                             return !stopRequested
                         }
 
                         override fun onPhase(name: String) {
+                            Session.jadxProgressMsg = "JADX $name…"
                             runOnUiThread { updateStatus("JADX $name…") }
                         }
                     })
@@ -356,9 +442,18 @@ class CodeViewerActivity : Activity() {
                     Session.jadxTruncated = res.truncated
                 } else if (res.sources.isNotEmpty()) {
                     Session.jadxCache.putAll(res.sources)
+                    Session.jadxErrors = res.errors
                     Session.jadxTruncated = true
                 }
-                Session.jadxLog = res.log.toList()
+                val secs = try {
+                    JavaHarvest.findSecrets(Session.jadxCache, 200)
+                } catch (t: Throwable) {
+                    emptyList<JavaHarvest.Hit>()
+                }
+                Session.jadxSecrets = secs.size
+                val logPlus = res.log.toMutableList()
+                for (h in secs.take(10)) logPlus.add("[sec] ${h.className}:${h.line} ${h.snippet}")
+                Session.jadxLog = logPlus.toList()
                 Session.jadxDone = true
             } catch (t: OutOfMemoryError) {
                 fail = "Memoria insuficiente: prueba con un APK más pequeño o cierra apps."
@@ -368,12 +463,18 @@ class CodeViewerActivity : Activity() {
                 Session.jadxDone = true
             } finally {
                 Session.jadxError = res?.error ?: fail
+                Session.jadxRunning = false
+                Session.jadxProgressMsg = ""
+                Session.jadxSeq++
                 runOnUiThread {
                     markWorking(false)
                     btnStop.isEnabled = false
                     progress.visibility = View.GONE
+                    seenSeq = Session.jadxSeq
+                    refreshList(filtered)
                     modeSmali = false
                     showingLog = false
+                    selectFirstWithJava()
                     showCode()
                     updateStatus(res?.error ?: fail)
                 }
@@ -403,6 +504,7 @@ class CodeViewerActivity : Activity() {
         if (Session.smaliTruncated) sb.append("+recorte")
         sb.append(" | java: ").append(Session.jadxCache.size)
         if (Session.jadxDone) sb.append(" err=").append(Session.jadxErrors)
+            .append(" sec=").append(Session.jadxSecrets)
         if (Session.jadxTruncated) sb.append("+recorte")
         if (!Session.jadxDone) sb.append(" (sin descompilar)")
         if (extra != null && extra.isNotEmpty()) sb.append("\n").append(extra)
@@ -413,6 +515,7 @@ class CodeViewerActivity : Activity() {
         val q = codeSearch.text.toString()
         if (q.isEmpty()) {
             hits.text = ""
+            lastFindQuery = ""
             return
         }
         val text = code.text.toString()
@@ -424,8 +527,35 @@ class CodeViewerActivity : Activity() {
             if (lines.size < 5) lines.add(text.substring(0, idx).count { it == '\n' } + 1)
             idx = text.indexOf(q, idx + 1)
         }
-        hits.text = if (count == 0) "sin coincidencias"
+        var msg = if (count == 0) "sin coincidencias"
             else "$count coincidencias (líneas ${lines.joinToString()})"
+        // Búsqueda global en el Java: repetir Buscar avanza al siguiente hit.
+        if (Session.jadxCache.isNotEmpty()) {
+            if (q != lastFindQuery) {
+                lastFindMatches = try {
+                    JavaHarvest.search(Session.jadxCache, q, true, 200)
+                } catch (t: Throwable) {
+                    emptyList()
+                }
+                lastFindIdx = -1
+                lastFindQuery = q
+            }
+            if (lastFindMatches.isNotEmpty()) {
+                lastFindIdx = (lastFindIdx + 1) % lastFindMatches.size()
+                val h = lastFindMatches[lastFindIdx]
+                modeSmali = false
+                showingLog = false
+                val desc = filtered.firstOrNull { d ->
+                    JadxAdapter.candidateKeys(d).contains(h.className)
+                }
+                if (desc != null) selected = desc
+                code.text = Session.jadxCache[h.className] ?: code.text.toString()
+                msg += "; java ${lastFindIdx + 1}/${lastFindMatches.size()} ${h.className}:${h.line}"
+            } else {
+                msg += "; java-global: 0"
+            }
+        }
+        hits.text = msg
     }
 
     private fun exportCurrent() {
@@ -443,26 +573,63 @@ class CodeViewerActivity : Activity() {
         }
     }
 
+    private fun exportJavaZip() {
+        if (Session.jadxCache.isEmpty() || working) return
+        markWorking(true)
+        progress.visibility = View.VISIBLE
+        hits.text = "Comprimiendo Java…"
+        Thread {
+            var dest: String? = null
+            var fail: String? = null
+            var n = 0
+            var trunc = false
+            try {
+                val snap = LinkedHashMap(Session.jadxCache)
+                val zr = JavaHarvest.zip(snap)
+                val bytes = zr?.zip
+                if (bytes == null) {
+                    fail = "sin datos"
+                } else {
+                    n = zr.files
+                    trunc = zr.truncated
+                    dest = saveBytesToDownloads(bytes, "java.zip", "application/zip")
+                }
+            } catch (t: Throwable) {
+                fail = t.message
+            }
+            runOnUiThread {
+                markWorking(false)
+                progress.visibility = View.GONE
+                hits.text = if (dest != null)
+                    "Guardado: $dest ($n clases${if (trunc) ", recortado" else ""})"
+                    else "Error exportando: $fail"
+            }
+        }.start()
+    }
+
+    private fun saveTextToDownloads(text: String, name: String): String =
+        saveBytesToDownloads(text.toByteArray(), name, "text/plain")
+
     @SuppressLint("NewApi")
-    private fun saveTextToDownloads(text: String, name: String): String {
+    private fun saveBytesToDownloads(data: ByteArray, name: String, mime: String): String {
         val safePkg = if (Session.pkg == "?") "apk" else Session.pkg.replace('.', '_')
         if (Build.VERSION.SDK_INT >= 29) {
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, name)
-                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                put(MediaStore.Downloads.MIME_TYPE, mime)
                 put(MediaStore.Downloads.RELATIVE_PATH, "Download/REA-Mobile/$safePkg")
             }
             val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: throw IllegalStateException("MediaStore rechazó la inserción")
             contentResolver.openOutputStream(uri)?.use { out ->
-                out.write(text.toByteArray())
+                out.write(data)
             } ?: throw IllegalStateException("sin stream de salida")
             return "Descargas/REA-Mobile/$safePkg/$name"
         } else {
             val dir = getExternalFilesDir(null)
                 ?: throw IllegalStateException("sin almacenamiento externo")
             val dest = File(dir, name)
-            FileOutputStream(dest).use { it.write(text.toByteArray()) }
+            FileOutputStream(dest).use { it.write(data) }
             return dest.absolutePath
         }
     }

@@ -6,12 +6,15 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.RandomAccessFile;
 import java.security.MessageDigest;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -91,6 +94,9 @@ public final class ReaEngine {
         public boolean arscTruncated;
         public List<String> appClasses = new ArrayList<>();
         public int appClassTotal;
+        public boolean apkSigBlock;
+        public List<String> topPackages = new ArrayList<>();
+        public List<String> topHosts = new ArrayList<>();
         public int urlTotal;
         public int ipTotal;
         public int emailTotal;
@@ -130,6 +136,9 @@ public final class ReaEngine {
                     .append(" metodos=").append(totalMethods).append('\n');
             sb.append("ofuscacionRatio=").append(String.format(Locale.US, "%.2f", obfuscatedRatio)).append('\n');
             sb.append("clasesPropias=").append(appClassTotal).append('\n');
+            sb.append("sigBlockV2=").append(apkSigBlock).append('\n');
+            sb.append("topPaquetes=").append(topPackages).append('\n');
+            sb.append("hostsTop=").append(topHosts).append('\n');
             sb.append("api=").append(apiStats).append('\n');
             sb.append("nativas=").append(nativeLibs).append('\n');
             sb.append("frameworks=").append(frameworks).append('\n');
@@ -194,6 +203,9 @@ public final class ReaEngine {
             sb.append(",\"classes\":").append(totalClasses);
             sb.append(",\"methods\":").append(totalMethods);
             sb.append(",\"obfuscatedRatio\":").append(String.format(Locale.US, "%.3f", obfuscatedRatio));
+            sb.append(",\"apkSigBlock\":").append(apkSigBlock);
+            jsonStrList(sb, "topPackages", topPackages);
+            jsonStrList(sb, "topHosts", topHosts);
             jsonStrList(sb, "dexFiles", dexFiles);
             jsonStrList(sb, "nativeLibs", nativeLibs);
             jsonStrList(sb, "frameworks", frameworks);
@@ -287,6 +299,7 @@ public final class ReaEngine {
             r.fileName = apk.getName();
             r.fileSize = apk.length();
             hashFile(apk, r);
+            r.apkSigBlock = hasApkSigBlock(apk);
 
             Set<String> urlSet = new LinkedHashSet<>();
             Set<String> ipSet = new LinkedHashSet<>();
@@ -295,6 +308,7 @@ public final class ReaEngine {
             Set<String> suspSet = new LinkedHashSet<>();
             int[] counters = new int[4]; // url, ip, email, secret
             Set<String> frameworks = new LinkedHashSet<>();
+            Map<String, Integer> pkgCounts = new LinkedHashMap<>();
             long obfWeighted = 0;
             long obfTotal = 0;
 
@@ -361,7 +375,10 @@ public final class ReaEngine {
                     mergeStats(r.apiStats, di.apiStats);
                     String slash = "L" + r.packageName.replace('.', '/') + "/";
                     for (DexParser.ClassInfo ci : di.classes) {
-                        if (ci.name != null && !"?".equals(r.packageName) && ci.name.startsWith(slash)) {
+                        if (ci.name == null) continue;
+                        String px = prefix2(ci.name);
+                        pkgCounts.put(px, pkgCounts.containsKey(px) ? pkgCounts.get(px) + 1 : 1);
+                        if (!"?".equals(r.packageName) && ci.name.startsWith(slash)) {
                             r.appClassTotal++;
                             if (r.appClasses.size() < 5000) r.appClasses.add(ci.name);
                         }
@@ -427,6 +444,8 @@ public final class ReaEngine {
             r.ipTotal = counters[1];
             r.emailTotal = counters[2];
             r.secretTotal = counters[3];
+            r.topPackages = topCounts(pkgCounts, 8);
+            r.topHosts = topHosts(urlSet, 8);
 
             buildFindings(r);
             finishStatic(r);
@@ -763,8 +782,14 @@ public final class ReaEngine {
                     System.gc();
                     try {
                         File wd = outZip.getParentFile() != null ? outZip.getParentFile() : new File(".");
+                        long heap = 256L * 1024 * 1024;
+                        try {
+                            heap = Runtime.getRuntime().maxMemory();
+                        } catch (Throwable ignored) {
+                        }
                         JadxAdapter.Result jr = JadxAdapter.decompileFiltered(
-                                apk, wd, 2, slashes, 300, null);
+                                apk, wd, JadxAdapter.recommendedThreads(heap), slashes,
+                                JadxAdapter.recommendedCap(heap), null);
                         for (Map.Entry<String, String> e : jr.sources.entrySet()) {
                             putText(zos, "rea/JAVA/" + e.getKey().replace('.', '/') + ".java", e.getValue());
                         }
@@ -817,6 +842,121 @@ public final class ReaEngine {
         zos.closeEntry();
     }
 
+    /** true si el APK trae bloque de firma v2/v3+ (magia antes del directorio). Nunca lanza. */
+    static boolean hasApkSigBlock(File apk) {
+        RandomAccessFile raf = null;
+        try {
+            if (apk == null || !apk.isFile()) return false;
+            raf = new RandomAccessFile(apk, "r");
+            long len = raf.length();
+            if (len < 64) return false;
+            long scan = Math.min(len, 65536 + 22);
+            byte[] tail = new byte[(int) scan];
+            raf.seek(len - scan);
+            raf.readFully(tail);
+            int eocd = -1;
+            for (int i = tail.length - 22; i >= 0; i--) {
+                if (tail[i] == 'P' && tail[i + 1] == 'K' && tail[i + 2] == 5 && tail[i + 3] == 6) {
+                    eocd = i;
+                    break;
+                }
+            }
+            if (eocd < 0) return false;
+            int cdo = (tail[eocd + 16] & 0xFF) | ((tail[eocd + 17] & 0xFF) << 8)
+                    | ((tail[eocd + 18] & 0xFF) << 16) | ((tail[eocd + 19] & 0xFF) << 24);
+            if (cdo < 32 || (long) cdo > len) return false;
+            byte[] foot = new byte[24];
+            raf.seek((long) cdo - 24);
+            raf.readFully(foot);
+            String magic = "APK Sig Block 42";
+            for (int i = 0; i < 16; i++) {
+                if (foot[8 + i] != (byte) magic.charAt(i)) return false;
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            if (raf != null) {
+                try {
+                    raf.close();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+    }
+
+    /** Prefijo de 2 segmentos ("Lcom/a/b/C;" a "com/a") u "otros". Nunca lanza. */
+    static String prefix2(String desc) {
+        try {
+            if (desc == null || !desc.startsWith("L")) return "otros";
+            int a = desc.indexOf('/', 1);
+            if (a < 0) return "otros";
+            int b = desc.indexOf('/', a + 1);
+            if (b < 0) return "otros";
+            return desc.substring(1, b);
+        } catch (Throwable t) {
+            return "otros";
+        }
+    }
+
+    /** Top N "k=v" ordenado por valor desc (empates por clave). Nunca lanza. */
+    static List<String> topCounts(Map<String, Integer> counts, int n) {
+        List<String> out = new ArrayList<>();
+        try {
+            if (counts == null || counts.isEmpty() || n <= 0) return out;
+            List<Map.Entry<String, Integer>> es = new ArrayList<>(counts.entrySet());
+            Collections.sort(es, new Comparator<Map.Entry<String, Integer>>() {
+                @Override
+                public int compare(Map.Entry<String, Integer> a, Map.Entry<String, Integer> b) {
+                    int c = b.getValue().compareTo(a.getValue());
+                    if (c != 0) return c;
+                    return a.getKey().compareTo(b.getKey());
+                }
+            });
+            for (int i = 0; i < Math.min(n, es.size()); i++) {
+                out.add(es.get(i).getKey() + "=" + es.get(i).getValue());
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
+    /** Top N hosts "h=c" de una colección de URLs. Nunca lanza. */
+    static List<String> topHosts(Collection<String> urls, int n) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        try {
+            if (urls != null) {
+                for (String u : urls) {
+                    String h = hostOf(u);
+                    if (h == null) continue;
+                    counts.put(h, counts.containsKey(h) ? counts.get(h) + 1 : 1);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return topCounts(counts, n);
+    }
+
+    private static String hostOf(String url) {
+        try {
+            if (url == null) return null;
+            int s = url.indexOf("://");
+            if (s < 0) return null;
+            int e = url.indexOf('/', s + 3);
+            String h = e < 0 ? url.substring(s + 3) : url.substring(s + 3, e);
+            int q = h.indexOf('?');
+            if (q >= 0) h = h.substring(0, q);
+            int at = h.lastIndexOf('@');
+            if (at >= 0) h = h.substring(at + 1);
+            int c = h.indexOf(':');
+            if (c >= 0) h = h.substring(0, c);
+            h = h.toLowerCase(Locale.US);
+            return h.isEmpty() ? null : h;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
     private static void mergeStats(Map<String, Integer> acc, Map<String, Integer> one) {
         for (Map.Entry<String, Integer> e : one.entrySet()) {
             acc.put(e.getKey(), acc.containsKey(e.getKey()) ? acc.get(e.getKey()) + e.getValue() : e.getValue());
@@ -832,10 +972,14 @@ public final class ReaEngine {
         if (!r.certSubjects.isEmpty()) {
             r.finding("firma", r.certSubjects.size() + " certificado(s) en META-INF",
                     r.certSubjects.get(0), "archivos=" + r.certFiles);
-        } else {
-            r.finding("firma", "Sin certificados X.509 legibles en META-INF",
-                    "Puede usar solo firma v2/v3+ (bloque de firma, no extraíble por ZIP).",
+        } else if (!r.apkSigBlock) {
+            r.finding("firma", "Sin firma detectable",
+                    "Ni certificados v1 en META-INF ni bloque v2/v3+.",
                     "archivos=" + r.certFiles);
+        }
+        if (r.apkSigBlock) {
+            r.finding("firma", "Bloque de firma APK v2/v3+ presente",
+                    "Firma moderna fuera del ZIP visible.", "magia \"APK Sig Block 42\"");
         }
         if (!r.frameworks.isEmpty()) {
             r.finding("frameworks", "Tecnologías: " + r.frameworks,
@@ -878,7 +1022,7 @@ public final class ReaEngine {
     }
 
     private static void finishStatic(ApkReport r) {
-        r.limitations.add("Sin descompilación a Java: requiere JADX con JDK completo, no disponible on-device.");
+        r.limitations.add("Java bajo demanda en el visor (JADX on-device con topes); el informe base no incluye fuentes.");
         r.limitations.add("Sin referencias cruzadas completas (xrefs): solo firmas, conteos y stats por paquete.");
         r.limitations.add("Sin análisis dinámico (Frida/adb): estático únicamente.");
         r.limitations.add("AXML y ARSC decodificados con parser propio (best-effort).");

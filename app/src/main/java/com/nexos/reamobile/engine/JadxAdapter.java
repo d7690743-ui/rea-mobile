@@ -83,6 +83,95 @@ public final class JadxAdapter {
 
     /** Tope de líneas de log por resultado. */
     public static final int MAX_LOG_LINES = 120;
+    /** APK multidex bajo este total: carga completa directa, sin escaneo. */
+    public static final long SMALL_APK_BYTES = 8_000_000L;
+    /** Presupuesto de heap por clase para intentar la carga completa. */
+    public static final long BYTES_PER_CLASS = 32768L;
+
+    /** Plan de carga elegido por tamaño del APK y heap. */
+    public static class DexPlan {
+        public boolean preferPerDex;
+        public int dexCount;
+        public long totalBytes;
+        public int totalClasses;
+        public String reason = "";
+        public List<DexHit> hits;
+    }
+
+    /** Hilos JADX recomendados según heap máximo. Nunca lanza. */
+    public static int recommendedThreads(long maxMem) {
+        try {
+            return maxMem < 256L * 1024 * 1024 ? 1 : 2;
+        } catch (Throwable t) {
+            return 1;
+        }
+    }
+
+    /** Tope de clases recomendado según heap máximo. Nunca lanza. */
+    public static int recommendedCap(long maxMem) {
+        try {
+            if (maxMem < 256L * 1024 * 1024) return 150;
+            if (maxMem < 512L * 1024 * 1024) return 300;
+            return 600;
+        } catch (Throwable t) {
+            return 150;
+        }
+    }
+
+    /** Elige carga completa o directa por dex. Nunca lanza. */
+    public static DexPlan planDexLoad(File apk, long maxMem, List<String> pkgSlashes) {
+        return planDexLoadFor(apk, maxMem, SMALL_APK_BYTES, BYTES_PER_CLASS, pkgSlashes);
+    }
+
+    /** Variante con umbrales inyectables (tests). Nunca lanza. */
+    static DexPlan planDexLoadFor(File apk, long maxMem, long smallBytes, long bytesPerClass,
+                                  List<String> pkgSlashes) {
+        DexPlan p = new DexPlan();
+        try {
+            if (apk == null || !apk.isFile()) {
+                p.reason = "sin apk";
+                return p;
+            }
+            ZipFile zip = new ZipFile(apk);
+            try {
+                Enumeration<? extends ZipEntry> en = zip.entries();
+                while (en.hasMoreElements()) {
+                    ZipEntry e = en.nextElement();
+                    if (!e.isDirectory() && e.getName().matches("classes\\d*\\.dex")) {
+                        p.dexCount++;
+                        long s = e.getSize();
+                        if (s > 0) p.totalBytes += s;
+                    }
+                }
+            } finally {
+                try {
+                    zip.close();
+                } catch (Throwable ignored) {
+                }
+            }
+            if (p.dexCount <= 1) {
+                p.reason = "dex único";
+                return p;
+            }
+            if (p.totalBytes <= smallBytes) {
+                p.reason = "apk pequeño";
+                return p;
+            }
+            long budget = bytesPerClass <= 0 ? Long.MAX_VALUE : maxMem / bytesPerClass;
+            p.hits = scanDexes(apk, pkgSlashes);
+            for (DexHit h : p.hits) p.totalClasses += h.totalClasses;
+            if (p.totalClasses > budget) {
+                p.preferPerDex = true;
+                p.reason = "APK grande";
+            } else {
+                p.reason = "cabe en heap";
+            }
+        } catch (Throwable ignored) {
+            p.preferPerDex = false;
+            p.reason = "repliegue";
+        }
+        return p;
+    }
 
     /** Descompila todo el dex/apk sin filtro. Nunca lanza. */
     public static Result decompile(File input, File workDir, int threads) {
@@ -114,6 +203,62 @@ public final class JadxAdapter {
         } catch (Throwable ignored) {
         }
         return out;
+    }
+
+    /**
+     * Claves externas candidatas ("a.B$C$1" a ["a.B$C", "a.B"]).
+     * Las inners suelen venir vacías (van incluidas en la externa).
+     * Nunca lanza.
+     */
+    public static List<String> outerKeys(String dottedKey) {
+        List<String> out = new ArrayList<>();
+        try {
+            if (dottedKey == null) return out;
+            String k = dottedKey;
+            while (true) {
+                int d = k.lastIndexOf('$');
+                if (d <= 0) break;
+                k = k.substring(0, d);
+                out.add(k);
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
+    /**
+     * true si el descriptor smali muestra Java en sources: directa o
+     * replegando a externas, ignorando valores nulos o vacíos.
+     * Misma búsqueda del visor. Nunca lanza.
+     */
+    public static boolean hasJava(String smaliDesc, Map<String, String> sources) {
+        if (smaliDesc == null || sources == null) return false;
+        try {
+            for (String c : candidateKeys(smaliDesc)) {
+                if (!isBlank(sources.get(c))) return true;
+                for (String o : outerKeys(c)) {
+                    if (!isBlank(sources.get(o))) return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.trim().isEmpty();
+    }
+
+    /** Primer descriptor con Java o null. Nunca lanza. */
+    public static String firstWithJava(List<String> descs, Map<String, String> sources) {
+        try {
+            if (descs == null) return null;
+            for (String d : descs) {
+                if (hasJava(d, sources)) return d;
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
     }
 
     /**
@@ -477,13 +622,28 @@ public final class JadxAdapter {
     }
 
     /**
-     * APK/ZIP: intenta carga completa (mejor calidad cross-dex) y, solo si
-     * aborta por memoria, reintenta dex por dex. Devuelve el mejor parcial.
-     * Nunca lanza.
+     * APK/ZIP: si el plan lo pide, va directo por dex (reutilizando el
+     * escaneo); si no, intenta carga completa (mejor calidad cross-dex) y,
+     * solo si aborta por memoria o falla total, reintenta dex por dex.
+     * Devuelve el mejor parcial. Nunca lanza.
      */
     private static Result decompileZip(File apk, File workDir, int threads,
                                        List<String> pkgSlashes, int maxClasses,
                                        Progress progress, MemoryPolicy mem) {
+        long maxMem;
+        try {
+            maxMem = Runtime.getRuntime().maxMemory();
+        } catch (Throwable t) {
+            maxMem = 256L * 1024 * 1024;
+        }
+        DexPlan plan = planDexLoad(apk, maxMem, pkgSlashes);
+        if (plan.preferPerDex) {
+            phase(progress, "APK grande: directo por dex");
+            return decompileZipPerDex(apk, workDir, threads, pkgSlashes,
+                    maxClasses, progress, mem,
+                    "APK grande: directo por dex (" + plan.totalClasses + " clases)",
+                    plan.hits);
+        }
         phase(progress, "cargando APK");
         Result full = decompileSingle(apk, workDir, threads, pkgSlashes,
                 maxClasses, progress, mem, "APK");
@@ -495,7 +655,7 @@ public final class JadxAdapter {
         } catch (Throwable ignored) {
         }
         Result per = decompileZipPerDex(apk, workDir, threads, pkgSlashes,
-                maxClasses, progress, mem);
+                maxClasses, progress, mem, null, null);
         if (per.sources.size() > full.sources.size() || full.sources.isEmpty()) return per;
         return full;
     }
@@ -507,8 +667,10 @@ public final class JadxAdapter {
      */
     private static Result decompileZipPerDex(File apk, File workDir, int threads,
                                              List<String> pkgSlashes, int maxClasses,
-                                             Progress progress, MemoryPolicy mem) {
+                                             Progress progress, MemoryPolicy mem,
+                                             String prelude, List<DexHit> prescan) {
         Result acc = new Result();
+        if (prelude != null && !prelude.isEmpty()) log(acc, prelude);
         int cap = maxClasses <= 0 ? Integer.MAX_VALUE : maxClasses;
         List<String> dexNames = new ArrayList<>();
         try {
@@ -539,7 +701,8 @@ public final class JadxAdapter {
         // Búsqueda previa: solo se cargan dex con coincidencias.
         phase(progress, "localizando clases");
         Map<String, DexHit> hits = new LinkedHashMap<>();
-        for (DexHit h : scanDexes(apk, pkgSlashes)) hits.put(h.name, h);
+        List<DexHit> scanned = prescan != null ? prescan : scanDexes(apk, pkgSlashes);
+        for (DexHit h : scanned) hits.put(h.name, h);
         int withHits = 0;
         for (String dn : dexNames) {
             DexHit h = hits.get(dn);

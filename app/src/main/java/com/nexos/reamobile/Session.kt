@@ -17,6 +17,14 @@ object Session {
     var jadxDone = false
     var jadxError: String? = null
     var jadxLog: List<String> = emptyList()
+    /** Generación de resultados JADX: ++ por cada descompilación terminada. */
+    var jadxSeq = 0
+    /** Hay una descompilación en curso (quizá de otra instancia del visor). */
+    @Volatile var jadxRunning = false
+    /** Último mensaje de progreso publicado por el hilo de fondo. */
+    @Volatile var jadxProgressMsg = ""
+    /** Secretos de alta señal hallados en el Java descompilado. */
+    var jadxSecrets = 0
 
     fun pkgSlash(): String = if (pkg == "?") "?/" else pkg.replace('.', '/') + "/"
 
@@ -30,5 +38,9 @@ object Session {
         jadxDone = false
         jadxError = null
         jadxLog = emptyList()
+        jadxSeq = 0
+        jadxRunning = false
+        jadxProgressMsg = ""
+        jadxSecrets = 0
     }
 }

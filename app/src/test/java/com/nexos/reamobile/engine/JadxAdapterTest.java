@@ -195,6 +195,77 @@ public class JadxAdapterTest {
         assertTrue(JadxAdapter.candidateKeys(null).isEmpty());
     }
 
+    @Test
+    public void lookupVisorHasJavaYPrimera() {
+        Map<String, String> src = new java.util.LinkedHashMap<>();
+        src.put("com.x.A", "class A{}");
+        src.put("com.x.R.color", "class color{}");
+        src.put("com.x.Vacia", null);
+        assertTrue(JadxAdapter.hasJava("Lcom/x/A;", src));
+        assertTrue(JadxAdapter.hasJava("Lcom/x/R$color;", src));
+        assertTrue(!JadxAdapter.hasJava("Lcom/x/Falta;", src));
+        assertTrue(!JadxAdapter.hasJava("Lcom/x/Vacia;", src));
+        assertTrue(!JadxAdapter.hasJava(null, src));
+        assertTrue(!JadxAdapter.hasJava("Lcom/x/A;", null));
+        List<String> descs = java.util.Arrays.asList(
+                "Lcom/x/Falta;", "Lcom/x/R$color;", "Lcom/x/A;");
+        assertEquals("Lcom/x/R$color;", JadxAdapter.firstWithJava(descs, src));
+        assertNull(JadxAdapter.firstWithJava(
+                java.util.Arrays.asList("Lcom/x/Falta;"), src));
+        assertNull(JadxAdapter.firstWithJava(null, src));
+    }
+
+    @Test
+    public void topesAdaptativosPorHeap() {
+        long m256 = 256L * 1024 * 1024;
+        long m512 = 512L * 1024 * 1024;
+        assertEquals(1, JadxAdapter.recommendedThreads(m256 - 1));
+        assertEquals(2, JadxAdapter.recommendedThreads(m256));
+        assertEquals(150, JadxAdapter.recommendedCap(m256 - 1));
+        assertEquals(300, JadxAdapter.recommendedCap(m256));
+        assertEquals(600, JadxAdapter.recommendedCap(m512));
+    }
+
+    @Test
+    public void planDexLoadEligeRuta() throws Exception {
+        byte[] dex = SmaliExtractTest.buildTestDex();
+        File uno = new File(tmp.getRoot(), "uno.apk");
+        writeZip(uno, new String[]{"classes.dex"}, new byte[][]{dex});
+        JadxAdapter.DexPlan p1 = JadxAdapter.planDexLoad(uno, 1024, null);
+        assertTrue(!p1.preferPerDex);
+        assertEquals(1, p1.dexCount);
+        File dos = new File(tmp.getRoot(), "dos.apk");
+        writeZip(dos, new String[]{"classes.dex", "classes2.dex"}, new byte[][]{dex, dex});
+        JadxAdapter.DexPlan p2 = JadxAdapter.planDexLoad(dos, 8L * 1024 * 1024 * 1024, null);
+        assertTrue(!p2.preferPerDex);
+        JadxAdapter.DexPlan p3 = JadxAdapter.planDexLoadFor(dos, 32768, -1, 32768, null);
+        assertTrue(p3.preferPerDex);
+        assertEquals(2, p3.totalClasses);
+        assertTrue(!p3.reason.isEmpty());
+        assertNotNull(p3.hits);
+        JadxAdapter.DexPlan p4 = JadxAdapter.planDexLoadFor(
+                dos, 8L * 1024 * 1024 * 1024, -1, 32768, null);
+        assertTrue(!p4.preferPerDex);
+        assertTrue(!JadxAdapter.planDexLoad(
+                new File(tmp.getRoot(), "no.apk"), 1024, null).preferPerDex);
+    }
+
+    @Test
+    public void javaVacioRepliegaAExterna() {
+        assertEquals(java.util.Arrays.asList("com.x.A$B", "com.x.A"),
+                JadxAdapter.outerKeys("com.x.A$B$1"));
+        assertTrue(JadxAdapter.outerKeys("com.x.A").isEmpty());
+        assertTrue(JadxAdapter.outerKeys(null).isEmpty());
+        Map<String, String> src = new java.util.LinkedHashMap<>();
+        src.put("com.x.A", "class A{}");
+        src.put("com.x.A$1", "");
+        src.put("com.x.SoloVacia", "  ");
+        assertTrue(JadxAdapter.hasJava("Lcom/x/A$1;", src));
+        assertTrue(!JadxAdapter.hasJava("Lcom/x/SoloVacia;", src));
+        assertEquals("Lcom/x/A$1;", JadxAdapter.firstWithJava(
+                java.util.Arrays.asList("Lcom/x/SoloVacia;", "Lcom/x/A$1;"), src));
+    }
+
     @Test(timeout = 180000)
     public void anonimaResuelvePorNombreRaw() throws Exception {
         File dex = new File(tmp.getRoot(), "t.dex");
