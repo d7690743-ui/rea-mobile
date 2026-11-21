@@ -511,27 +511,32 @@ public final class SmaliDumper {
         }
     }
 
-    /** Tamaño de payload switch/array o 1 si es nop. */
+    /**
+     * Tamaño de payload switch/array o 1 si es nop.
+     * Layout verificado contra baksmali: el ident va PRIMERO
+     * (0x0100 packed, 0x0200 sparse, 0x0300 array). Un switch de tamaño 0
+     * no existe en dex real: se trata como nop para evitar falsos positivos.
+     */
     private static int payloadSize(int[] units, int p, int n) {
-        if (p + 1 >= n) return 1;
-        int ident = units[p + 1];
+        if (p >= n) return 1;
+        int u0 = units[p];
         try {
-            if (ident == 0x0000) { // packed-switch
+            if (u0 == 0x0100) { // packed-switch
                 if (p + 4 > n) return 1;
-                int size = units[p + 2];
-                if (size < 0 || size > 100000) return 1;
+                int size = units[p + 1];
+                if (size <= 0 || size > 100000) return 1;
                 int total = 4 + size * 2;
                 return (p + total <= n) ? total : 1;
-            } else if (ident == 0x0200) { // sparse-switch
+            } else if (u0 == 0x0200) { // sparse-switch
                 if (p + 2 > n) return 1;
-                int size = units[p + 2];
-                if (size < 0 || size > 100000) return 1;
+                int size = units[p + 1];
+                if (size <= 0 || size > 100000) return 1;
                 int total = 2 + size * 4;
                 return (p + total <= n) ? total : 1;
-            } else if (ident == 0x0300) { // fill-array-data
+            } else if (u0 == 0x0300) { // fill-array-data
                 if (p + 4 > n) return 1;
-                int width = units[p + 2];
-                long size = ((long) units[p + 3]) | ((long) units[p + 4] << 16);
+                int width = units[p + 1];
+                long size = ((long) units[p + 2]) | ((long) units[p + 3] << 16);
                 if (width <= 0 || width > 8 || size < 0 || size > 1000000) return 1;
                 int total = 4 + (int) ((size * width + 1) / 2);
                 return (p + total <= n) ? total : 1;
@@ -667,39 +672,39 @@ public final class SmaliDumper {
     }
 
     private static void renderPayload(StringBuilder sb, int[] units, int p, int size) {
-        if (size <= 1 || p + 1 >= units.length) {
+        if (size <= 1 || p >= units.length) {
             sb.append("    nop\n");
             return;
         }
-        int ident = units[p + 1];
-        if (ident == 0x0000 && size >= 4) {
-            int n = units[p + 2];
-            int firstKey = units[p + 3] | (units[p + 4] << 16);
+        int u0 = units[p];
+        if (u0 == 0x0100 && size >= 4) {
+            int n = units[p + 1];
+            int firstKey = units[p + 2] | (units[p + 3] << 16);
             sb.append("    # packed-switch: size=").append(n).append(" first_key=0x")
                     .append(Integer.toHexString(firstKey)).append('\n');
-            for (int i = 0; i < n && 5 + i * 2 + 1 < size; i++) {
-                int tgt = units[p + 5 + i * 2] | (units[p + 6 + i * 2] << 16);
+            for (int i = 0; i < n && 4 + i * 2 + 1 < size; i++) {
+                int tgt = units[p + 4 + i * 2] | (units[p + 5 + i * 2] << 16);
                 sb.append("    #   0x").append(Integer.toHexString(firstKey + i)).append(" -> +0x")
                         .append(Integer.toHexString(tgt)).append(" (raw)\n");
             }
-        } else if (ident == 0x0200 && size >= 2) {
-            int n = units[p + 2];
+        } else if (u0 == 0x0200 && size >= 2) {
+            int n = units[p + 1];
             sb.append("    # sparse-switch: size=").append(n).append('\n');
-            for (int i = 0; i < n && 3 + i * 2 + 1 < size; i++) {
-                int key = units[p + 3 + i * 2] | (units[p + 4 + i * 2] << 16);
-                int tp = p + 3 + n * 2 + i * 2;
+            for (int i = 0; i < n && 2 + i * 2 + 1 < size; i++) {
+                int key = units[p + 2 + i * 2] | (units[p + 3 + i * 2] << 16);
+                int tp = p + 2 + n * 2 + i * 2;
                 int tgt = (tp + 1 < p + size) ? (units[tp] | (units[tp + 1] << 16)) : 0;
                 sb.append("    #   0x").append(Integer.toHexString(key)).append(" -> +0x")
                         .append(Integer.toHexString(tgt)).append(" (raw)\n");
             }
-        } else if (ident == 0x0300 && size >= 4) {
-            int width = units[p + 2];
-            long n = ((long) units[p + 3]) | ((long) units[p + 4] << 16);
+        } else if (u0 == 0x0300 && size >= 4) {
+            int width = units[p + 1];
+            long n = ((long) units[p + 2]) | ((long) units[p + 3] << 16);
             sb.append("    # fill-array-data: width=").append(width).append(" size=").append(n).append('\n');
             int dataUnits = size - 4;
             StringBuilder hex = new StringBuilder();
             for (int i = 0; i < dataUnits && i < 64; i++) {
-                hex.append(hex(units[p + 5 + i], 4));
+                hex.append(hex(units[p + 4 + i], 4));
             }
             if (dataUnits > 64) hex.append("...");
             sb.append("    #   datos=").append(hex).append('\n');

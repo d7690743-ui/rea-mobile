@@ -70,6 +70,20 @@ public class SmaliExtractTest {
     }
 
     @Test
+    public void payloadSwitches() {
+        List<byte[]> dexes = new ArrayList<>();
+        dexes.add(buildTestDex());
+        String smali = SmaliDumper.dumpSingleClass(dexes, "Lcom/x/A;");
+        assertNotNull(smali);
+        // sparse: size en units[p+1]; regresión: leía units[p+2] (55137=0xD761)
+        assertTrue(smali, smali.contains("# sparse-switch: size=2"));
+        assertTrue(smali, smali.contains("#   0x82b1d761 -> +0x3 (raw)"));
+        assertTrue(smali, smali.contains("#   0x5 -> +0x1 (raw)"));
+        assertTrue(smali, smali.contains("# packed-switch: size=3 first_key=0xa"));
+        assertTrue(smali, smali.contains("#   0xa -> +0x1 (raw)"));
+    }
+
+    @Test
     public void unaSolaClase() {
         List<byte[]> dexes = new ArrayList<>();
         dexes.add(buildTestDex());
@@ -86,9 +100,9 @@ public class SmaliExtractTest {
         zos.closeEntry();
     }
 
-    /** DEX mínimo: 1 clase Lcom/x/A; con foo() y bar(). Con mapa válido. */
+    /** DEX mínimo: 1 clase Lcom/x/A; con foo(), bar(), sw() y pk(). Con mapa válido. */
     static byte[] buildTestDex() {
-        String[] strs = {"Lcom/x/A;", "Ljava/lang/Object;", "foo", "A.java", "V", "bar", "hello"};
+        String[] strs = {"Lcom/x/A;", "Ljava/lang/Object;", "foo", "A.java", "V", "bar", "hello", "sw", "pk"};
         DexBuilder d = new DexBuilder();
         d.bytes(new byte[]{'d', 'e', 'x', '\n', '0', '3', '5', 0});
         d.u32(0);
@@ -112,7 +126,7 @@ public class SmaliExtractTest {
         d.u32(0);
         d.u32(0);
         d.u32(0);
-        d.u32(2);
+        d.u32(4);
         int pMethOff = d.pos;
         d.u32(0);
         d.u32(1);
@@ -147,6 +161,12 @@ public class SmaliExtractTest {
         d.u16(0);
         d.u16(0);
         d.u32(5);
+        d.u16(0);
+        d.u16(0);
+        d.u32(7);
+        d.u16(0);
+        d.u16(0);
+        d.u32(8);
         int clsDefsOff = d.pos;
         d.setU32(pClsOff, clsDefsOff);
         d.u32(0);
@@ -191,11 +211,57 @@ public class SmaliExtractTest {
         d.u32(2);
         d.u16(0x0128);
         d.u16(0x000e);
+        // sw: sparse-switch v0,+4; return-void; payload size=2 (key0=0x82B1D761)
+        d.align();
+        int code2 = d.pos;
+        d.u16(1);
+        d.u16(0);
+        d.u16(0);
+        d.u16(0);
+        d.u32(0);
+        d.u32(14);
+        d.u16(0x002c);
+        d.u16(0x0004);
+        d.u16(0x0000);
+        d.u16(0x000e);
+        d.u16(0x0200);
+        d.u16(0x0002);
+        d.u16(0xD761);
+        d.u16(0x82B1);
+        d.u16(0x0005);
+        d.u16(0x0000);
+        d.u16(0x0003);
+        d.u16(0x0000);
+        d.u16(0x0001);
+        d.u16(0x0000);
+        // pk: packed-switch v0,+4; return-void; payload size=3 first=10
+        d.align();
+        int code3 = d.pos;
+        d.u16(1);
+        d.u16(0);
+        d.u16(0);
+        d.u16(0);
+        d.u32(0);
+        d.u32(14);
+        d.u16(0x002b);
+        d.u16(0x0004);
+        d.u16(0x0000);
+        d.u16(0x000e);
+        d.u16(0x0100);
+        d.u16(0x0003);
+        d.u16(0x000A);
+        d.u16(0x0000);
+        d.u16(0x0001);
+        d.u16(0x0000);
+        d.u16(0x0002);
+        d.u16(0x0000);
+        d.u16(0x0003);
+        d.u16(0x0000);
         int cd = d.pos;
         d.setU32(pClassData, cd);
         d.uleb(0);
         d.uleb(0);
-        d.uleb(2);
+        d.uleb(4);
         d.uleb(0);
         d.uleb(0);
         d.uleb(0x9);
@@ -203,6 +269,12 @@ public class SmaliExtractTest {
         d.uleb(1);
         d.uleb(0x1);
         d.uleb(code1);
+        d.uleb(1);
+        d.uleb(0x9);
+        d.uleb(code2);
+        d.uleb(1);
+        d.uleb(0x9);
+        d.uleb(code3);
         // map_list ordenado por tipo, alineado a 4
         d.align();
         int mapOff = d.pos;
@@ -212,11 +284,11 @@ public class SmaliExtractTest {
         d.mapItem(0x0001, strs.length, strIdsOff);
         d.mapItem(0x0002, 3, typeIdsOff);
         d.mapItem(0x0003, 1, protoIdsOff);
-        d.mapItem(0x0005, 2, methIdsOff);
+        d.mapItem(0x0005, 4, methIdsOff);
         d.mapItem(0x0006, 1, clsDefsOff);
         d.mapItem(0x1000, 1, mapOff);
         d.mapItem(0x2000, 1, cd);
-        d.mapItem(0x2001, 2, code0);
+        d.mapItem(0x2001, 4, code0);
         d.mapItem(0x2002, strs.length, firstStrData);
         d.setU32(pDataSize, d.pos - dataOff);
         d.setU32(pFileSize, d.pos);
