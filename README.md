@@ -1,0 +1,46 @@
+# REA Mobile
+
+Análisis estático de APK 100% on-device, inspirado en
+[REA (Reverse Engineer Anything)](https://github.com/morluto/rea) (MIT) y su fork
+solo-Android [REA-ReverseEngineerAndroid](https://github.com/Hubupup/REA-ReverseEngineerAndroid).
+Código del motor escrito desde cero en Java/Kotlin; sin dependencias externas.
+
+## Qué cubre el informe (ingeniería inversa estática)
+
+- Identidad: nombre, tamaño, MD5/SHA-1/SHA-256, package.
+- Manifest decodificado (parser AXML propio): permisos, actividades, servicios,
+  receptores, proveedores + extracto XML.
+- Ficha de Android (PackageManager): versiones, SDK, componentes, huellas de firma.
+- DEX: nº de strings/clases/métodos, stats de API por paquete, heurística de
+  ofuscación, muestra de métodos y APIs sensibles.
+- Recursos: nº de strings de `resources.arsc`, conteos de `res/` y `assets/`.
+- Nativas: inventario de `.so` con arquitectura por cabecera ELF.
+- Firma: certificados X.509 de `META-INF` (sujeto y serie).
+- Indicios: URLs, IPs, emails y posibles secretos en strings (DEX + ARSC).
+- Cada hallazgo trae su evidencia; el informe cierra con limitaciones y unknowns,
+  al estilo REA.
+
+## Qué se adaptó de REA y qué no
+
+| Familia REA | REA Mobile |
+|---|---|
+| `android` (paquete, manifest, clases, métodos) | Sí: AXML propio + PackageManager + parser DEX |
+| `artifact` (inventario, firmas) | Sí: ZIP + hashes + X.509 + huellas |
+| `apktool` (recursos) | Parcial: pool ARSC + árbol res/assets, sin recompile |
+| `native` (ELF) | Parcial: inventario + arquitectura, sin desensamble |
+| `flutter` | Solo detección (libflutter/libapp) |
+| `adb`, `frida`, `jeb`, `direct`, `enhanced` | No: requieren PC, adb, Ghidra/IDA o runtime |
+| `application`, `session` (evidencia, unknowns) | Sí: informe con evidencia, limitaciones y unknowns |
+
+Fuera del MVP: descompilación a Java (requiere JADX + JDK completo),
+xrefs completas, análisis dinámico y reconstrucción total (necesita aapt2).
+
+## Compilación
+
+No compila en Termux nativo (aapt2 es glibc). Se compila en GitHub Actions
+con `bash autopush.sh "mensaje"` (misma toolchain que apk-template:
+Gradle 8.9, AGP 8.7.3, Kotlin 1.9.24, Java 17, SDK 35, minSdk 24).
+
+## Uso responsable
+
+Analiza solo APKs que te pertenecen o para los que tienes autorización expresa.
