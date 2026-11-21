@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.security.MessageDigest;
 import java.security.cert.Certificate;
@@ -22,6 +23,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Motor de análisis REA Mobile: inventario del ZIP, hashes, firmas, manifest,
@@ -32,7 +34,7 @@ public final class ReaEngine {
     private ReaEngine() {
     }
 
-    public static final String VERSION = "0.1";
+    public static final String VERSION = "0.2";
     private static final long MAX_DEX_BYTES = 160L * 1024 * 1024;
     private static final int MAX_SAMPLE = 50;
     private static final int MANIFEST_TEXT_CAP = 6000;
@@ -603,6 +605,173 @@ public final class ReaEngine {
         } catch (Exception e2) {
             return null;
         }
+    }
+
+    public static class ExtractResult {
+        public String packageName = "?";
+        public int copiedEntries;
+        public int smaliClasses;
+        public long bytes;
+        public List<String> notes = new ArrayList<>();
+        public String error;
+
+        public String summary() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("paquete=").append(packageName).append('\n');
+            sb.append("entradasCopiadas=").append(copiedEntries).append('\n');
+            sb.append("clasesSmali=").append(smaliClasses).append('\n');
+            sb.append("zipBytes=").append(bytes).append('\n');
+            for (String n : notes) sb.append("nota=").append(n).append('\n');
+            if (error != null) sb.append("ERROR=").append(error).append('\n');
+            return sb.toString();
+        }
+    }
+
+    private static final long MAX_COPY_ENTRY = 80L * 1024 * 1024;
+    private static final long MAX_ZIP_TOTAL = 250L * 1024 * 1024;
+    private static final int MAX_STRING_LINES = 30000;
+
+    /** Extrae el árbol del APK + smali + informe a un ZIP. Nunca lanza. */
+    public static ExtractResult extractToZip(File apk, File outZip) {
+        ExtractResult r = new ExtractResult();
+        try {
+            if (apk == null || !apk.isFile()) {
+                r.error = "archivo no válido";
+                return r;
+            }
+            ZipFile zip = new ZipFile(apk);
+            try {
+                String manifestXml = "";
+                String pkg = "?";
+                ZipEntry man = zip.getEntry("AndroidManifest.xml");
+                if (man != null) {
+                    byte[] mb = readEntry(zip, man, 20 * 1024 * 1024);
+                    if (mb != null) {
+                        manifestXml = AxmlDecoder.decode(mb);
+                        pkg = AxmlDecoder.packageName(manifestXml);
+                    }
+                }
+                r.packageName = pkg;
+                String pkgSlash = pkg.replace('.', '/') + "/";
+                List<String> dexNames = new ArrayList<>();
+                Enumeration<? extends ZipEntry> en0 = zip.entries();
+                while (en0.hasMoreElements()) {
+                    ZipEntry e = en0.nextElement();
+                    if (!e.isDirectory() && e.getName().matches("classes\\d*\\.dex")) dexNames.add(e.getName());
+                }
+                List<byte[]> dexBytes = new ArrayList<>();
+                for (String dn : dexNames) {
+                    ZipEntry e = zip.getEntry(dn);
+                    byte[] b = e == null ? null : readEntry(zip, e, MAX_DEX_BYTES);
+                    if (b == null) {
+                        r.notes.add(dn + ": omitido por tamaño");
+                        continue;
+                    }
+                    dexBytes.add(b);
+                }
+                SmaliDumper.DumpResult smali = SmaliDumper.dumpAll(dexBytes, pkgSlash);
+                r.smaliClasses = smali.classes.size();
+                r.notes.addAll(smali.notes);
+                if (smali.truncated) r.notes.add("smali: recortado por topes");
+                List<String> dexStrings = new ArrayList<>();
+                for (byte[] b : dexBytes) {
+                    DexParser.DexInfo di = DexParser.parse(b, "dex");
+                    if (di.error == null) {
+                        for (String s : di.strings) {
+                            if (dexStrings.size() >= MAX_STRING_LINES) break;
+                            dexStrings.add(s);
+                        }
+                    }
+                }
+                List<String> arscStrings = new ArrayList<>();
+                int arscTotal = 0;
+                ZipEntry arsc = zip.getEntry("resources.arsc");
+                if (arsc != null) {
+                    byte[] ab = readEntry(zip, arsc, 100 * 1024 * 1024);
+                    if (ab != null) {
+                        ArscStrings.ArscInfo ai = ArscStrings.parse(ab);
+                        if (ai.error == null) {
+                            arscTotal = ai.stringCount;
+                            arscStrings.addAll(ai.strings);
+                        }
+                    }
+                }
+                ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(outZip));
+                long total = 0;
+                try {
+                    StringBuilder tree = new StringBuilder();
+                    Enumeration<? extends ZipEntry> en = zip.entries();
+                    while (en.hasMoreElements()) {
+                        ZipEntry e = en.nextElement();
+                        if (e.isDirectory()) continue;
+                        String name = e.getName();
+                        tree.append(name).append(" (").append(e.getSize()).append(" B)\n");
+                        if (e.getSize() > MAX_COPY_ENTRY) {
+                            r.notes.add(name + ": no copiado (>80MB)");
+                            continue;
+                        }
+                        byte[] data = readEntry(zip, e, MAX_COPY_ENTRY);
+                        if (data == null) {
+                            r.notes.add(name + ": no copiado");
+                            continue;
+                        }
+                        if (total + data.length > MAX_ZIP_TOTAL) {
+                            r.notes.add("tope total ZIP alcanzado en " + name);
+                            break;
+                        }
+                        zos.putNextEntry(new ZipEntry("apk/" + name));
+                        zos.write(data);
+                        zos.closeEntry();
+                        total += data.length;
+                        r.copiedEntries++;
+                    }
+                    putText(zos, "rea/manifest.xml", manifestXml.isEmpty() ? "(no decodificado)\n" : manifestXml);
+                    putText(zos, "rea/ARBOL.txt", tree.toString());
+                    StringBuilder cls = new StringBuilder();
+                    for (String s : smali.classSummaries) cls.append(s).append('\n');
+                    putText(zos, "rea/CLASES_PROPIAS.txt", cls.length() == 0 ? "(sin clases)\n" : cls.toString());
+                    for (SmaliDumper.SmaliClass sc : smali.classes) {
+                        zos.putNextEntry(new ZipEntry("rea/" + sc.path));
+                        zos.write(sc.text.getBytes("UTF-8"));
+                        zos.closeEntry();
+                    }
+                    StringBuilder ds = new StringBuilder();
+                    for (String s : dexStrings) ds.append(s.replace('\n', ' ')).append('\n');
+                    putText(zos, "rea/INDICIOS_strings_dex.txt", ds.toString());
+                    StringBuilder as = new StringBuilder("total=" + arscTotal + "\n");
+                    for (String s : arscStrings) as.append(s.replace('\n', ' ')).append('\n');
+                    putText(zos, "rea/INDICIOS_strings_arsc.txt", as.toString());
+                    ApkReport rep = analyze(apk);
+                    putText(zos, "rea/INFORME.txt", rep.toText());
+                    StringBuilder xs = new StringBuilder();
+                    xs.append("paquete=").append(r.packageName).append('\n');
+                    xs.append("entradasCopiadas=").append(r.copiedEntries).append('\n');
+                    xs.append("clasesSmali=").append(r.smaliClasses).append('\n');
+                    for (String nn : r.notes) xs.append("nota=").append(nn).append('\n');
+                    putText(zos, "rea/EXTRACCION.txt", xs.toString());
+                } finally {
+                    try {
+                        zos.close();
+                    } catch (Exception ignored) {
+                    }
+                }
+                r.bytes = outZip.length();
+            } finally {
+                try {
+                    zip.close();
+                } catch (Exception ignored) {
+                }
+            }
+        } catch (Exception e) {
+            r.error = "fallo general: " + e.getMessage();
+        }
+        return r;
+    }
+
+    private static void putText(ZipOutputStream zos, String name, String text) throws Exception {
+        zos.putNextEntry(new ZipEntry(name));
+        zos.write(text.getBytes("UTF-8"));
+        zos.closeEntry();
     }
 
     private static void mergeStats(Map<String, Integer> acc, Map<String, Integer> one) {

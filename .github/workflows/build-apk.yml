@@ -19,6 +19,8 @@ jobs:
         run: chmod +x gradlew
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
+      - name: Unit tests (motor JVM)
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:

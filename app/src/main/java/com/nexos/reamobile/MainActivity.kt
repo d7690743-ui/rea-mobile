@@ -1,13 +1,16 @@
 package com.nexos.reamobile
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.ComponentInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
@@ -16,17 +19,20 @@ import android.widget.ScrollView
 import android.widget.TextView
 import com.nexos.reamobile.engine.ReaEngine
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.security.MessageDigest
 
-/** Pantalla única: abrir APK por SAF, analizar en hilo y mostrar/compartir informe. */
+/** Pantalla única: abrir APK por SAF, analizar, extraer ZIP y compartir informe. */
 class MainActivity : Activity() {
 
     private lateinit var txt: TextView
     private lateinit var btnPick: Button
     private lateinit var btnShare: Button
+    private lateinit var btnExtract: Button
     private lateinit var progress: ProgressBar
     private var lastReport: String = ""
+    private var lastApk: File? = null
     private var analyzing = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -45,11 +51,16 @@ class MainActivity : Activity() {
             text = "Compartir informe"
             isEnabled = false
         }
+        btnExtract = Button(this).apply {
+            text = "Extraer ZIP (árbol + smali)"
+            isEnabled = false
+        }
         progress = ProgressBar(this).apply { visibility = View.GONE }
         val scroll = ScrollView(this)
         txt = TextView(this).apply {
             text = "Elige un APK para empezar.\n\nAnálisis estático local: manifest, " +
                     "componentes, permisos, firmas, dex, recursos, nativas y heurísticas. " +
+                    "El botón Extraer genera un ZIP con el árbol completo y el smali. " +
                     "Sin red, sin nube."
             textSize = 13f
             setTextIsSelectable(true)
@@ -58,6 +69,7 @@ class MainActivity : Activity() {
         root.addView(title)
         root.addView(btnPick)
         root.addView(btnShare)
+        root.addView(btnExtract)
         root.addView(progress)
         root.addView(
             scroll,
@@ -67,6 +79,7 @@ class MainActivity : Activity() {
 
         btnPick.setOnClickListener { if (!analyzing) openPicker() }
         btnShare.setOnClickListener { shareReport() }
+        btnExtract.setOnClickListener { extractZip() }
         showDisclaimerOnce()
     }
 
@@ -116,6 +129,7 @@ class MainActivity : Activity() {
     private fun analyzeUri(uri: Uri) {
         analyzing = true
         btnShare.isEnabled = false
+        btnExtract.isEnabled = false
         progress.visibility = View.VISIBLE
         txt.text = "Analizando…"
         Thread {
@@ -128,8 +142,10 @@ class MainActivity : Activity() {
                 val pmSection = packageManagerSection(tmp.absolutePath)
                 lastReport = report.toText() + "\n" + pmSection
                 runOnUiThread {
+                    lastApk = tmp
                     txt.text = lastReport
                     btnShare.isEnabled = true
+                    btnExtract.isEnabled = true
                     progress.visibility = View.GONE
                 }
             } catch (e: Exception) {
@@ -141,6 +157,68 @@ class MainActivity : Activity() {
                 analyzing = false
             }
         }.start()
+    }
+
+    private fun extractZip() {
+        val apk = lastApk
+        if (analyzing || apk == null || !apk.isFile()) return
+        analyzing = true
+        btnPick.isEnabled = false
+        btnShare.isEnabled = false
+        btnExtract.isEnabled = false
+        progress.visibility = View.VISIBLE
+        txt.text = "Extrayendo…"
+        Thread {
+            try {
+                val out = File(cacheDir, "rea_extraccion.zip")
+                if (out.exists()) out.delete()
+                val res = ReaEngine.extractToZip(apk, out)
+                if (res.error != null) throw IllegalStateException(res.error)
+                val dest = saveZipToDownloads(out, res.packageName)
+                val summary = "ZIP guardado: " + dest + "\n\n" + res.summary()
+                runOnUiThread {
+                    txt.text = summary + "\n" + lastReport
+                    progress.visibility = View.GONE
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    txt.text = "Error extrayendo: ${e.message}"
+                    progress.visibility = View.GONE
+                }
+            } finally {
+                analyzing = false
+                runOnUiThread {
+                    btnPick.isEnabled = true
+                    btnShare.isEnabled = lastReport.isNotEmpty()
+                    btnExtract.isEnabled = lastApk != null
+                }
+            }
+        }.start()
+    }
+
+    @SuppressLint("NewApi")
+    private fun saveZipToDownloads(zip: File, pkg: String): String {
+        val safePkg = if (pkg == "?" || pkg.isEmpty()) "apk" else pkg.replace('.', '_')
+        val name = safePkg + "_rea_mobile.zip"
+        if (Build.VERSION.SDK_INT >= 29) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, name)
+                put(MediaStore.Downloads.MIME_TYPE, "application/zip")
+                put(MediaStore.Downloads.RELATIVE_PATH, "Download/REA-Mobile")
+            }
+            val uri: Uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("MediaStore rechazó la inserción")
+            contentResolver.openOutputStream(uri)?.use { out ->
+                FileInputStream(zip).use { inp -> inp.copyTo(out) }
+            } ?: throw IllegalStateException("sin stream de salida")
+            return "Descargas/REA-Mobile/$name"
+        } else {
+            val dir = getExternalFilesDir(null)
+                ?: throw IllegalStateException("sin almacenamiento externo")
+            val dest = File(dir, name)
+            FileInputStream(zip).use { inp -> FileOutputStream(dest).use { inp.copyTo(it) } }
+            return dest.absolutePath
+        }
     }
 
     @Suppress("DEPRECATION")

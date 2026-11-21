@@ -5,6 +5,13 @@ Análisis estático de APK 100% on-device, inspirado en
 solo-Android [REA-ReverseEngineerAndroid](https://github.com/Hubupup/REA-ReverseEngineerAndroid).
 Código del motor escrito desde cero en Java/Kotlin; sin dependencias externas.
 
+## Novedades v0.2
+
+- Smali on-device de las clases propias (desensamblador Dalvik propio, best-effort).
+- Extracción a ZIP: árbol completo + `manifest.xml` decodificado + smali + strings
+  + informe. Se guarda en Descargas/REA-Mobile.
+- Test unitario mantenido (`SmaliExtractTest`) que se ejecuta en Actions.
+
 ## Qué cubre el informe (ingeniería inversa estática)
 
 - Identidad: nombre, tamaño, MD5/SHA-1/SHA-256, package.
@@ -32,8 +39,10 @@ Código del motor escrito desde cero en Java/Kotlin; sin dependencias externas.
 | `adb`, `frida`, `jeb`, `direct`, `enhanced` | No: requieren PC, adb, Ghidra/IDA o runtime |
 | `application`, `session` (evidencia, unknowns) | Sí: informe con evidencia, limitaciones y unknowns |
 
-Fuera del MVP: descompilación a Java (requiere JADX + JDK completo),
-xrefs completas, análisis dinámico y reconstrucción total (necesita aapt2).
+Fuera del MVP: descompilación a Java real (requiere JADX + JDK completo),
+xrefs completas entre bytecode, análisis dinámico y reconstrucción total
+(necesita aapt2). El smali on-device cubre lectura de lógica; la extracción
+cubre recursos y árbol.
 
 ## Compilación
 
