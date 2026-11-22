@@ -429,6 +429,8 @@ public final class SmaliDumper {
     private static int renderCode(byte[] dex, Tables t, StringBuilder sb, int codeOff) {
         check(dex, codeOff, 16);
         int regs = u16(dex, codeOff);
+        int ins = u16(dex, codeOff + 2);
+        int firstParam = regs - ins;
         int insnsSize = u32(dex, codeOff + 12);
         if (insnsSize < 0 || insnsSize > 1000000) throw new IllegalArgumentException("code_item inválido");
         int n = Math.min(insnsSize, MAX_UNITS_PER_METHOD);
@@ -463,7 +465,7 @@ public final class SmaliDumper {
                 renderPayload(sb, units, addr, sizes.get(i));
             } else {
                 sb.append("    ").append(NAMES[op]);
-                String args = renderArgs(fmt, op, units, addr, t, targets);
+                String args = renderArgs(fmt, op, units, addr, t, targets, firstParam);
                 if (!args.isEmpty()) sb.append(' ').append(args);
                 sb.append('\n');
             }
@@ -569,18 +571,18 @@ public final class SmaliDumper {
     }
 
     private static String renderArgs(int fmt, int op, int[] units, int p, Tables t,
-                                     Map<Integer, Boolean> targets) {
+                                     Map<Integer, Boolean> targets, int firstParam) {
         int u0 = units[p];
         int refKind = REFS[op];
         switch (fmt) {
             case F10x:
                 return "";
             case F12x:
-                return v((u0 >> 8) & 15) + ", " + v((u0 >> 12) & 15);
+                return v((u0 >> 8) & 15, firstParam) + ", " + v((u0 >> 12) & 15, firstParam);
             case F11n:
-                return v((u0 >> 8) & 15) + ", 0x" + Integer.toHexString((u0 >> 12) & 15);
+                return v((u0 >> 8) & 15, firstParam) + ", 0x" + Integer.toHexString((u0 >> 12) & 15);
             case F11x:
-                return v((u0 >> 8) & 15);
+                return v((u0 >> 8) & 15, firstParam);
             case F10t:
                 return labelOrRaw(targets, p + (byte) (u0 >> 8), 1);
             case F20t:
@@ -588,54 +590,54 @@ public final class SmaliDumper {
             case F30t:
                 return labelOrRaw(targets, p + (units[p + 1] | (units[p + 2] << 16)), 3);
             case F22x:
-                return v((u0 >> 8) & 255) + ", " + v(units[p + 1]);
+                return v((u0 >> 8) & 255, firstParam) + ", " + v(units[p + 1], firstParam);
             case F21t:
-                return v((u0 >> 8) & 255) + ", " + labelOrRaw(targets, p + (short) units[p + 1], 2);
+                return v((u0 >> 8) & 255, firstParam) + ", " + labelOrRaw(targets, p + (short) units[p + 1], 2);
             case F22t:
-                return v((u0 >> 8) & 15) + ", " + v((u0 >> 12) & 15) + ", "
+                return v((u0 >> 8) & 15, firstParam) + ", " + v((u0 >> 12) & 15, firstParam) + ", "
                         + labelOrRaw(targets, p + (short) units[p + 1], 2);
             case F21s:
-                return v((u0 >> 8) & 255) + ", 0x" + hex(units[p + 1] & 0xFFFF, 4);
+                return v((u0 >> 8) & 255, firstParam) + ", 0x" + hex(units[p + 1] & 0xFFFF, 4);
             case F21h:
-                return v((u0 >> 8) & 255) + ", 0x" + hex((long) units[p + 1] << 16, 8);
+                return v((u0 >> 8) & 255, firstParam) + ", 0x" + hex((long) units[p + 1] << 16, 8);
             case F21lh:
-                return v((u0 >> 8) & 255) + ", 0x" + hex((long) units[p + 1] << 48, 16);
+                return v((u0 >> 8) & 255, firstParam) + ", 0x" + hex((long) units[p + 1] << 48, 16);
             case F21c:
-                return v((u0 >> 8) & 255) + ", " + ref(t, refKind, units[p + 1]);
+                return v((u0 >> 8) & 255, firstParam) + ", " + ref(t, refKind, units[p + 1]);
             case F22s:
-                return v((u0 >> 8) & 15) + ", " + v((u0 >> 12) & 15) + ", 0x" + hex(units[p + 1] & 0xFFFF, 4);
+                return v((u0 >> 8) & 15, firstParam) + ", " + v((u0 >> 12) & 15, firstParam) + ", 0x" + hex(units[p + 1] & 0xFFFF, 4);
             case F22b:
-                return v((u0 >> 8) & 15) + ", " + v((u0 >> 12) & 15) + ", 0x" + hex(units[p + 1] & 0xFF, 2);
+                return v((u0 >> 8) & 15, firstParam) + ", " + v((u0 >> 12) & 15, firstParam) + ", 0x" + hex(units[p + 1] & 0xFF, 2);
             case F23x: {
                 int u1 = units[p + 1];
-                return v((u0 >> 8) & 255) + ", " + v(u1 & 255) + ", " + v((u1 >> 8) & 255);
+                return v((u0 >> 8) & 255, firstParam) + ", " + v(u1 & 255, firstParam) + ", " + v((u1 >> 8) & 255, firstParam);
             }
             case F22c:
-                return v((u0 >> 8) & 15) + ", " + v((u0 >> 12) & 15) + ", " + ref(t, refKind, units[p + 1]);
+                return v((u0 >> 8) & 15, firstParam) + ", " + v((u0 >> 12) & 15, firstParam) + ", " + ref(t, refKind, units[p + 1]);
             case F32x:
-                return v(units[p + 1]) + ", " + v(units[p + 2]);
+                return v(units[p + 1], firstParam) + ", " + v(units[p + 2], firstParam);
             case F31i:
-                return v((u0 >> 8) & 255) + ", 0x" + hex(((long) units[p + 1]) | ((long) units[p + 2] << 16), 8);
+                return v((u0 >> 8) & 255, firstParam) + ", 0x" + hex(((long) units[p + 1]) | ((long) units[p + 2] << 16), 8);
             case F31t:
-                return v((u0 >> 8) & 255) + ", "
+                return v((u0 >> 8) & 255, firstParam) + ", "
                         + labelOrRaw(targets, p + (units[p + 1] | (units[p + 2] << 16)), 3);
             case F31c:
-                return v((u0 >> 8) & 255) + ", "
+                return v((u0 >> 8) & 255, firstParam) + ", "
                         + ref(t, refKind, units[p + 1] | (units[p + 2] << 16));
             case F35c:
-                return regs35c(u0, units[p + 2]) + ", " + ref(t, refKind, units[p + 1]);
+                return regs35c(u0, units[p + 2], firstParam) + ", " + ref(t, refKind, units[p + 1]);
             case F3rc:
-                return regs3rc((u0 >> 8) & 255, units[p + 2]) + ", " + ref(t, refKind, units[p + 1]);
+                return regs3rc((u0 >> 8) & 255, units[p + 2], firstParam) + ", " + ref(t, refKind, units[p + 1]);
             case F45cc:
-                return regs35c(u0, units[p + 2]) + ", " + ref(t, refKind, units[p + 1])
+                return regs35c(u0, units[p + 2], firstParam) + ", " + ref(t, refKind, units[p + 1])
                         + ", proto#0x" + hex(units[p + 3], 4);
             case F4rcc:
-                return regs3rc((u0 >> 8) & 255, units[p + 2]) + ", " + ref(t, refKind, units[p + 1])
+                return regs3rc((u0 >> 8) & 255, units[p + 2], firstParam) + ", " + ref(t, refKind, units[p + 1])
                         + ", proto#0x" + hex(units[p + 3], 4);
             case F51l: {
                 long lit = ((long) units[p + 1]) | ((long) units[p + 2] << 16)
                         | ((long) units[p + 3] << 32) | ((long) units[p + 4] << 48);
-                return v((u0 >> 8) & 255) + ", 0x" + hex(lit, 16);
+                return v((u0 >> 8) & 255, firstParam) + ", 0x" + hex(lit, 16);
             }
             default:
                 return "";
@@ -647,26 +649,27 @@ public final class SmaliDumper {
         return "+0x" + Integer.toHexString(size);
     }
 
-    private static String regs35c(int u0, int u2) {
-        int a = (u0 >> 8) & 15;
-        int[] regs = {u2 & 15, (u2 >> 4) & 15, (u2 >> 8) & 15, (u2 >> 12) & 15, (u0 >> 12) & 15};
+    private static String regs35c(int u0, int u2, int firstParam) {
+        // 35c es A|G|op: A (conteo) en bits 12-15, G (5º registro) en bits 8-11.
+        int a = (u0 >> 12) & 15;
+        int[] regs = {u2 & 15, (u2 >> 4) & 15, (u2 >> 8) & 15, (u2 >> 12) & 15, (u0 >> 8) & 15};
         if (a <= 0) return "{}";
         StringBuilder sb = new StringBuilder("{");
         for (int i = 0; i < a && i < 5; i++) {
             if (i > 0) sb.append(", ");
-            sb.append(v(regs[i]));
+            sb.append(v(regs[i], firstParam));
         }
         return sb.append('}').toString();
     }
 
-    private static String regs3rc(int a, int first) {
+    private static String regs3rc(int a, int first, int firstParam) {
         if (a <= 0) return "{}";
-        if (a == 1) return "{v" + first + "}";
+        if (a == 1) return "{" + v(first, firstParam) + "}";
         int n = Math.min(a, 256);
         StringBuilder sb = new StringBuilder("{");
         for (int i = 0; i < n; i++) {
             if (i > 0) sb.append(", ");
-            sb.append(v(first + i));
+            sb.append(v(first + i, firstParam));
         }
         if (a > n) sb.append(", ...");
         return sb.append('}').toString();
@@ -837,7 +840,8 @@ public final class SmaliDumper {
         return false;
     }
 
-    private static String v(int n) {
+    private static String v(int n, int firstParam) {
+        if (firstParam >= 0 && n >= firstParam) return "p" + (n - firstParam);
         return "v" + n;
     }
 

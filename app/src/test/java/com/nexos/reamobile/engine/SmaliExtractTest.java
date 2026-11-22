@@ -1,6 +1,7 @@
 package com.nexos.reamobile.engine;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -96,6 +97,54 @@ public class SmaliExtractTest {
     }
 
     @Test
+    public void invoke35cRegistros() {
+        List<byte[]> dexes = new ArrayList<>();
+        dexes.add(buildTestDex());
+        String smali = SmaliDumper.dumpSingleClass(dexes, "Lcom/x/A;");
+        assertNotNull(smali);
+        assertTrue(smali, smali.contains(".method public static iv()V"));
+        // 35c es A|G|op: u0=0x1071 -> A=1 registro (v3). Regresión: leía A
+        // en bits 8-11 y G en 12-15, así que imprimía {}.
+        assertTrue(smali, smali.contains("invoke-static {v3}, Lcom/x/A;->foo()V"));
+    }
+
+    @Test
+    public void invokeParametrosPN() {
+        List<byte[]> dexes = new ArrayList<>();
+        dexes.add(buildTestDex());
+        String smali = SmaliDumper.dumpSingleClass(dexes, "Lcom/x/A;");
+        assertNotNull(smali);
+        assertTrue(smali, smali.contains(".method public ip()V"));
+        // regs=5, ins=2 -> firstParam=3: v3=p0, v4=p1, v1 sigue v1.
+        assertTrue(smali, smali.contains("invoke-static {p0, p1, v1}, Lcom/x/A;->foo()V"));
+    }
+
+    @Test
+    public void estaticoSinInsSoloV() {
+        List<byte[]> dexes = new ArrayList<>();
+        dexes.add(buildTestDex());
+        String smali = SmaliDumper.dumpSingleClass(dexes, "Lcom/x/A;");
+        assertNotNull(smali);
+        // iv: regs=4, ins=0 -> sin parámetros, nunca pN.
+        int ini = smali.indexOf(".method public static iv()V");
+        assertTrue(smali, ini >= 0);
+        String sec = smali.substring(ini, smali.indexOf(".end method", ini));
+        assertTrue(sec, sec.contains("{v3}"));
+        assertFalse(sec, sec.contains("p0"));
+    }
+
+    @Test
+    public void invoke35cQuintoEsG() {
+        List<byte[]> dexes = new ArrayList<>();
+        dexes.add(buildTestDex());
+        String smali = SmaliDumper.dumpSingleClass(dexes, "Lcom/x/A;");
+        assertNotNull(smali);
+        assertTrue(smali, smali.contains(".method public static q5()V"));
+        // u0=0x5671 -> A=5, G=6: el quinto registro sale de G.
+        assertTrue(smali, smali.contains("invoke-static {v0, v1, v2, v5, v6}, Lcom/x/A;->foo()V"));
+    }
+
+    @Test
     public void unaSolaClase() {
         List<byte[]> dexes = new ArrayList<>();
         dexes.add(buildTestDex());
@@ -112,9 +161,9 @@ public class SmaliExtractTest {
         zos.closeEntry();
     }
 
-    /** DEX mínimo: 1 clase Lcom/x/A; con foo(), bar(), sw(), pk() y br(). Con mapa válido. */
+    /** DEX mínimo: 1 clase Lcom/x/A; con foo(), bar(), sw(), pk(), br(), iv(), ip() y q5(). Con mapa válido. */
     static byte[] buildTestDex() {
-        String[] strs = {"Lcom/x/A;", "Ljava/lang/Object;", "foo", "A.java", "V", "bar", "hello", "sw", "pk", "br"};
+        String[] strs = {"Lcom/x/A;", "Ljava/lang/Object;", "foo", "A.java", "V", "bar", "hello", "sw", "pk", "br", "iv", "ip", "q5"};
         DexBuilder d = new DexBuilder();
         d.bytes(new byte[]{'d', 'e', 'x', '\n', '0', '3', '5', 0});
         d.u32(0);
@@ -138,7 +187,7 @@ public class SmaliExtractTest {
         d.u32(0);
         d.u32(0);
         d.u32(0);
-        d.u32(5);
+        d.u32(8);
         int pMethOff = d.pos;
         d.u32(0);
         d.u32(1);
@@ -182,6 +231,15 @@ public class SmaliExtractTest {
         d.u16(0);
         d.u16(0);
         d.u32(9);
+        d.u16(0);
+        d.u16(0);
+        d.u32(10);
+        d.u16(0);
+        d.u16(0);
+        d.u32(11);
+        d.u16(0);
+        d.u16(0);
+        d.u32(12);
         int clsDefsOff = d.pos;
         d.setU32(pClsOff, clsDefsOff);
         d.u32(0);
@@ -286,11 +344,50 @@ public class SmaliExtractTest {
         d.u16(0x1012);
         d.u16(0x0128);
         d.u16(0x000e);
+        // iv: invoke-static {v3}, meth@0; return-void (u0=0x1071: A=1, G=0)
+        d.align();
+        int code5 = d.pos;
+        d.u16(4);
+        d.u16(0);
+        d.u16(1);
+        d.u16(0);
+        d.u32(0);
+        d.u32(4);
+        d.u16(0x1071);
+        d.u16(0x0000);
+        d.u16(0x0003);
+        d.u16(0x000e);
+        // ip: instancia, regs=5, ins=2 (p0=v3, p1=v4); invoke {v3, v4, v1}
+        d.align();
+        int code6 = d.pos;
+        d.u16(5);
+        d.u16(2);
+        d.u16(3);
+        d.u16(0);
+        d.u32(0);
+        d.u32(4);
+        d.u16(0x3071);
+        d.u16(0x0000);
+        d.u16(0x0143);
+        d.u16(0x000e);
+        // q5: invoke de 5 regs, u0=0x5671 (A=5, G=6); u2: C=0,D=1,E=2,F=5
+        d.align();
+        int code7 = d.pos;
+        d.u16(7);
+        d.u16(0);
+        d.u16(5);
+        d.u16(0);
+        d.u32(0);
+        d.u32(4);
+        d.u16(0x5671);
+        d.u16(0x0000);
+        d.u16(0x5210);
+        d.u16(0x000e);
         int cd = d.pos;
         d.setU32(pClassData, cd);
         d.uleb(0);
         d.uleb(0);
-        d.uleb(5);
+        d.uleb(8);
         d.uleb(0);
         d.uleb(0);
         d.uleb(0x9);
@@ -307,6 +404,15 @@ public class SmaliExtractTest {
         d.uleb(1);
         d.uleb(0x9);
         d.uleb(code4);
+        d.uleb(1);
+        d.uleb(0x9);
+        d.uleb(code5);
+        d.uleb(1);
+        d.uleb(0x1);
+        d.uleb(code6);
+        d.uleb(1);
+        d.uleb(0x9);
+        d.uleb(code7);
         // map_list ordenado por tipo, alineado a 4
         d.align();
         int mapOff = d.pos;
@@ -316,11 +422,11 @@ public class SmaliExtractTest {
         d.mapItem(0x0001, strs.length, strIdsOff);
         d.mapItem(0x0002, 3, typeIdsOff);
         d.mapItem(0x0003, 1, protoIdsOff);
-        d.mapItem(0x0005, 5, methIdsOff);
+        d.mapItem(0x0005, 8, methIdsOff);
         d.mapItem(0x0006, 1, clsDefsOff);
         d.mapItem(0x1000, 1, mapOff);
         d.mapItem(0x2000, 1, cd);
-        d.mapItem(0x2001, 5, code0);
+        d.mapItem(0x2001, 8, code0);
         d.mapItem(0x2002, strs.length, firstStrData);
         d.setU32(pDataSize, d.pos - dataOff);
         d.setU32(pFileSize, d.pos);
