@@ -19,6 +19,7 @@ import android.widget.ListView
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
+import com.nexos.reamobile.engine.FullReport
 import com.nexos.reamobile.engine.JadxAdapter
 import com.nexos.reamobile.engine.JavaHarvest
 import com.nexos.reamobile.engine.SmaliDumper
@@ -44,6 +45,7 @@ class CodeViewerActivity : Activity() {
     private lateinit var btnExport: Button
     private lateinit var btnLog: Button
     private lateinit var btnZip: Button
+    private lateinit var btnReport: Button
     private var lastFindQuery = ""
     private var lastFindMatches: List<JavaHarvest.Hit> = emptyList()
     private var lastFindIdx = -1
@@ -108,12 +110,18 @@ class CodeViewerActivity : Activity() {
         val btnFind = Button(this).apply { text = "Buscar" }
         btnExport = Button(this).apply { text = "Exportar" }
         btnZip = Button(this).apply { text = "Zip" }
+        btnReport = Button(this).apply { text = "Informe" }
         val rowFind = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(codeSearch, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(btnFind)
             addView(btnExport)
             addView(btnZip)
+        }
+        val rowReport = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(btnReport, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         }
         progress = ProgressBar(this).apply { visibility = View.GONE }
         val scroll = ScrollView(this)
@@ -130,6 +138,7 @@ class CodeViewerActivity : Activity() {
         root.addView(status)
         root.addView(rowTabs)
         root.addView(rowFind)
+        root.addView(rowReport)
         root.addView(hits)
         root.addView(progress)
         root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 2f))
@@ -144,6 +153,7 @@ class CodeViewerActivity : Activity() {
         btnLog.setOnClickListener { toggleLog() }
         btnExport.setOnClickListener { exportCurrent() }
         btnZip.setOnClickListener { exportJavaZip() }
+        btnReport.setOnClickListener { generateFullReport() }
         list.onItemClickListener =
             AdapterView.OnItemClickListener { _, _, pos, _ ->
                 if (pos in filtered.indices) selectClass(filtered[pos])
@@ -603,6 +613,56 @@ class CodeViewerActivity : Activity() {
                 hits.text = if (dest != null)
                     "Guardado: $dest ($n clases${if (trunc) ", recortado" else ""})"
                     else "Error exportando: $fail"
+            }
+        }.start()
+    }
+
+    /** Informe completo en un TXT: árbol del APK + clases + Java descompilado. */
+    private fun generateFullReport() {
+        val apk = Session.apk
+        if (apk == null || !apk.isFile() || working) return
+        markWorking(true)
+        progress.visibility = View.VISIBLE
+        hits.text = "Generando informe…"
+        Thread {
+            var dest: String? = null
+            var fail: String? = null
+            var stats = ""
+            try {
+                val tree = mutableListOf<String>()
+                try {
+                    ZipFile(apk).use { zip ->
+                        val en = zip.entries()
+                        while (en.hasMoreElements()) {
+                            val e = en.nextElement()
+                            if (!e.isDirectory) tree.add(e.name + " (" + e.size + " B)")
+                        }
+                    }
+                    tree.sort()
+                } catch (t: Throwable) {
+                    tree.add("(arbol no disponible: ${t.message})")
+                }
+                val classes = when {
+                    Session.appClasses.isNotEmpty() -> Session.appClasses
+                    Session.smaliCache.isNotEmpty() -> Session.smaliCache.keys.sorted()
+                    else -> filtered
+                }
+                val snap = LinkedHashMap(Session.jadxCache)
+                val rep = FullReport.build(Session.pkg, tree, classes, snap)
+                dest = saveTextToDownloads(rep.text, "informe_completo.txt")
+                stats = "arbol=${rep.treeLines} clases=${rep.classLines} java=${rep.javaFiles}" +
+                    (if (rep.treeTruncated || rep.classesTruncated || rep.javaTruncated)
+                        " (recortado)" else "")
+            } catch (e: OutOfMemoryError) {
+                fail = "memoria insuficiente"
+            } catch (t: Throwable) {
+                fail = t.message
+            }
+            runOnUiThread {
+                markWorking(false)
+                progress.visibility = View.GONE
+                hits.text = if (dest != null) "Guardado: $dest ($stats)"
+                else "Error generando informe: $fail"
             }
         }.start()
     }
