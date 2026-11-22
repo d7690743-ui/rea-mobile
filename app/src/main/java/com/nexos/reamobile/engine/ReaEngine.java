@@ -27,6 +27,8 @@ import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
+import com.nexos.reamobile.intelligence.IntelFinding;
+import com.nexos.reamobile.intelligence.IntelRegistry;
 
 /**
  * Motor de análisis REA Mobile: inventario del ZIP, hashes, firmas, manifest,
@@ -130,6 +132,7 @@ public final class ReaEngine {
         public String manifestNote = "";
         public List<String> dexNotes = new ArrayList<>();
         public List<Finding> findings = new ArrayList<>();
+        public IntelRegistry intel = new IntelRegistry();
         public List<String> limitations = new ArrayList<>();
         public List<String> unknowns = new ArrayList<>();
         public String error;
@@ -219,6 +222,19 @@ public final class ReaEngine {
             for (String l : limitations) sb.append("  - ").append(l).append('\n');
             sb.append("\n=== DESCONOCIDOS ===\n");
             for (String u : unknowns) sb.append("  - ").append(u).append('\n');
+            sb.append("\n=== INTELIGENCIA (").append(intel.size()).append(") ===\n");
+            if (intel.size() == 0) {
+                sb.append("  (sin hallazgos registrados)\n");
+            } else {
+                int shown = 0;
+                for (IntelFinding f : intel.all()) {
+                    if (shown >= 60) break;
+                    sb.append("  ").append(f.id).append(" [").append(f.category).append("] ")
+                            .append(f.description).append('\n');
+                    shown++;
+                }
+                if (intel.size() > shown) sb.append("  [...").append(intel.size() - shown).append(" mas...]\n");
+            }
             return sb.toString();
         }
 
@@ -1326,7 +1342,29 @@ public final class ReaEngine {
         }
     }
 
+    /**
+     * Puente OMEGA: vuelca los hallazgos clásicos al núcleo intelligence.
+     * Idempotente (no duplica si ya se alimentó) y nunca lanza.
+     */
+    static void feedIntel(ApkReport r) {
+        try {
+            if (r == null || r.findings == null || r.intel == null) return;
+            if (r.intel.size() > 0) return;
+            for (Finding f : r.findings) {
+                if (f == null) continue;
+                IntelFinding inf = IntelFinding.create(f.section, f.title);
+                String det = f.detail == null ? "" : f.detail;
+                String ev = f.evidence == null ? "" : f.evidence;
+                inf.evidence = det.isEmpty() ? ev : (ev.isEmpty() ? det : det + " // " + ev);
+                inf.limitations = "convertido de Finding v0.4 (estático)";
+                r.intel.add(inf);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
     private static void finishStatic(ApkReport r) {
+        feedIntel(r);
         r.limitations.add("Java bajo demanda en el visor (JADX on-device con topes); el informe base no incluye fuentes.");
         r.limitations.add("Xrefs parciales: llamadas de código propio (DexCalls) sin flujo inter-procedural completo.");
         r.limitations.add("Sin análisis dinámico (Frida/adb): estático únicamente.");

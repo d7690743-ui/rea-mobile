@@ -51,6 +51,27 @@ public class ReaEngineTest {
     }
 
     @Test
+    public void puenteIntel() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        r.findings.add(new ReaEngine.Finding("red", "2 URL(s)", "una", "DEX"));
+        r.findings.add(new ReaEngine.Finding("firma", "Bloque v2", "moderna", "magia"));
+        ReaEngine.feedIntel(r);
+        assertEquals(2, r.intel.size());
+        // Idempotente: segunda llamada no duplica.
+        ReaEngine.feedIntel(r);
+        assertEquals(2, r.intel.size());
+        String txt = r.toText();
+        assertTrue(txt, txt.contains("=== INTELIGENCIA (2) ==="));
+        assertTrue(txt, txt.contains("F-0001 [red] 2 URL(s)"));
+        assertTrue(txt, txt.contains("F-0002 [firma] Bloque v2"));
+        // Sin hallazgos: sección vacía explícita, sin lanzar.
+        ReaEngine.ApkReport vacio = new ReaEngine.ApkReport();
+        ReaEngine.feedIntel(vacio);
+        ReaEngine.feedIntel(null);
+        assertTrue(vacio.toText().contains("(sin hallazgos registrados)"));
+    }
+
+    @Test
     public void bloqueFirmaV2Detecta() throws Exception {
         File con = new File(tmp.getRoot(), "con.apk");
         writeMiniZip(con, true);

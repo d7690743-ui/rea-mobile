@@ -55,6 +55,8 @@ Paquete `com.nexos.reamobile.intelligence`, sin tocar código existente:
 - `IntelRegistry`: colector con tope (5000), ids `F-0001…`, consultas por
   categoría y clase. Java puro, nunca lanza.
 - `IntelTest`: alta, ids, tope, filtros, nulos.
-- Las fases B/C/H lo alimentarán; ningún motor cambia todavía.
+- Puente `ReaEngine.feedIntel`: vuelca los hallazgos clásicos al registro y
+  `toText()` añade la sección `INTELIGENCIA` (visible en la app). Las fases
+  B/C/H añadirán hallazgos propios con clase/método/evidencia.
 
 Verificación: suite JVM local + `testDebugUnitTest` en CI.
