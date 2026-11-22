@@ -22,10 +22,12 @@ import android.widget.TextView
 import com.nexos.reamobile.engine.FullReport
 import com.nexos.reamobile.engine.JadxAdapter
 import com.nexos.reamobile.engine.JavaHarvest
+import com.nexos.reamobile.engine.ReaEngine
 import com.nexos.reamobile.engine.SmaliDumper
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.util.zip.ZipFile
 
 /** Visor Fase 4: clases propias con pestañas Smali/Java, búsqueda y exportación. */
@@ -648,11 +650,32 @@ class CodeViewerActivity : Activity() {
                     else -> filtered
                 }
                 val snap = LinkedHashMap(Session.jadxCache)
-                val rep = FullReport.build(Session.pkg, tree, classes, snap)
+                val extras = FullReport.Extras()
+                extras.build = buildId()
+                // Informe estático (firma, manifest, hallazgos) al inicio del TXT.
+                extras.staticReport = try {
+                    ReaEngine.analyze(apk).toText()
+                } catch (t: Throwable) {
+                    ""
+                }
+                // Smali de respaldo para las clases sin Java.
+                try {
+                    ensureDex()
+                } catch (t: Throwable) {
+                }
+                extras.smali = FullReport.SmaliProvider { desc ->
+                    Session.smaliCache[desc] ?: try {
+                        SmaliDumper.dumpSingleClass(Session.dexBytes, desc)
+                    } catch (t: Throwable) {
+                        null
+                    }
+                }
+                val rep = FullReport.build(Session.pkg, tree, classes, snap, extras)
                 dest = saveTextToDownloads(rep.text, "informe_completo.txt")
                 stats = "arbol=${rep.treeLines} clases=${rep.classLines} java=${rep.javaFiles}" +
-                    (if (rep.treeTruncated || rep.classesTruncated || rep.javaTruncated)
-                        " (recortado)" else "")
+                    (if (rep.smaliFiles > 0) " smali=${rep.smaliFiles}" else "") +
+                    (if (rep.treeTruncated || rep.classesTruncated || rep.javaTruncated ||
+                        rep.smaliTruncated) " (recortado)" else "")
             } catch (e: OutOfMemoryError) {
                 fail = "memoria insuficiente"
             } catch (t: Throwable) {
@@ -665,6 +688,24 @@ class CodeViewerActivity : Activity() {
                 else "Error generando informe: $fail"
             }
         }.start()
+    }
+
+    /** "0.4.0 · 1a2b3c4d": versionName + 8 primeros hex del SHA-256 del APK de REA. */
+    private fun buildId(): String = try {
+        val v = packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+        val md = MessageDigest.getInstance("SHA-256")
+        File(packageCodePath).inputStream().use { ins ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = ins.read(buf)
+                if (n < 0) break
+                md.update(buf, 0, n)
+            }
+        }
+        val hex = md.digest().joinToString("") { "%02x".format(it) }
+        "$v · ${hex.substring(0, 8)}"
+    } catch (t: Throwable) {
+        ""
     }
 
     private fun saveTextToDownloads(text: String, name: String): String =

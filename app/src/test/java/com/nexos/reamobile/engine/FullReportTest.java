@@ -79,6 +79,106 @@ public class FullReportTest {
     }
 
     @Test
+    public void ordenaClasesPorClaseExternaYJavaPorNombre() {
+        List<String> c = new ArrayList<>();
+        c.add("Lcom/x/B;");
+        c.add("Lcom/x/A$2;");
+        c.add("Lcom/x/A;");
+        c.add("Lcom/x/A$1;");
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("com.x.B", "class B {}\n");
+        m.put("com.x.A", "class A {}\n");
+        FullReport.Result r = FullReport.build("com.x", null, c, m);
+        String t = r.text;
+        // A, A$1, A$2 juntas y antes de B.
+        assertTrue(t.indexOf("Lcom/x/A;") < t.indexOf("Lcom/x/A$1;"));
+        assertTrue(t.indexOf("Lcom/x/A$1;") < t.indexOf("Lcom/x/A$2;"));
+        assertTrue(t.indexOf("Lcom/x/A$2;") < t.indexOf("Lcom/x/B;"));
+        assertTrue(t.indexOf("class A {}") < t.indexOf("class B {}"));
+    }
+
+    @Test
+    public void quitaComentarioConRutaLocal() {
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("com.x.A", "package com.x;\n\n"
+                + "/* loaded from: /data/user/0/com.nexos.reamobile/cache/dexparts/part1.dex */\n"
+                + "/* otro comentario que se conserva */\npublic class A {}\n");
+        FullReport.Result r = FullReport.build("com.x", null, null, m);
+        assertTrue(!r.text.contains("loaded from"));
+        assertTrue(!r.text.contains("/data/user/0"));
+        assertTrue(r.text.contains("otro comentario que se conserva"));
+        assertTrue(r.text.contains("public class A {}"));
+        assertEquals(1, r.javaFiles);
+    }
+
+    @Test
+    public void incluyeInformeEstaticoYBuildAntesDelArbol() {
+        FullReport.Extras x = new FullReport.Extras();
+        x.build = "0.4.0 · 1a2b3c4d";
+        x.staticReport = "REA Mobile v0.4 — informe estático\n=== MANIFEST ===\n<manifest/>";
+        FullReport.Result r = FullReport.build("com.x", tree(), classes(), java(), x);
+        assertTrue(r.staticIncluded);
+        assertTrue(r.text.contains("(build 0.4.0 · 1a2b3c4d)"));
+        assertTrue(r.text.contains("=== INFORME ESTATICO"));
+        assertTrue(r.text.contains("<manifest/>"));
+        assertTrue(r.text.indexOf("=== INFORME ESTATICO") < r.text.indexOf("=== ARBOL"));
+        // Sin extras no aparece nada nuevo.
+        FullReport.Result sin = FullReport.build("com.x", tree(), classes(), java());
+        assertTrue(!sin.staticIncluded);
+        assertTrue(!sin.text.contains("INFORME ESTATICO"));
+        assertTrue(!sin.text.contains("(build "));
+    }
+
+    @Test
+    public void smaliDeRespaldoSoloParaClasesSinJava() {
+        List<String> c = new ArrayList<>();
+        c.add("Lcom/x/A;");
+        c.add("Lcom/x/Z;");
+        c.add("Lcom/x/Z$1;");
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("com.x.A", "class A {}\n");
+        final List<String> pedidas = new ArrayList<>();
+        FullReport.Extras x = new FullReport.Extras();
+        x.smali = new FullReport.SmaliProvider() {
+            @Override
+            public String smali(String d) {
+                pedidas.add(d);
+                return ".class public " + d + "\n";
+            }
+        };
+        FullReport.Result r = FullReport.build("com.x", null, c, m, x);
+        assertTrue(r.text.contains("=== SMALI DE RESPALDO (2 clases sin Java)"));
+        assertTrue(r.text.contains("===== smali: Lcom/x/Z; ====="));
+        assertTrue(r.text.contains("===== smali: Lcom/x/Z$1; ====="));
+        assertTrue(!r.text.contains("===== smali: Lcom/x/A; ====="));
+        assertEquals(2, r.smaliFiles);
+        assertEquals(2, pedidas.size());
+        assertTrue(!pedidas.contains("Lcom/x/A;"));
+    }
+
+    @Test
+    public void smaliRespetaTopeYProveedorQueFalla() {
+        List<String> c = new ArrayList<>();
+        c.add("Lcom/x/A;");
+        c.add("Lcom/x/B;");
+        c.add("Lcom/x/C;");
+        FullReport.Extras x = new FullReport.Extras();
+        x.maxSmaliClasses = 1;
+        x.smali = new FullReport.SmaliProvider() {
+            @Override
+            public String smali(String d) {
+                if (d.endsWith("A;")) throw new IllegalStateException("falla");
+                return ".class " + d + "\n";
+            }
+        };
+        FullReport.Result r = FullReport.build("com.x", null, c, new LinkedHashMap<String, String>(), x);
+        assertEquals(1, r.smaliFiles);
+        assertTrue(r.smaliTruncated);
+        assertEquals(3, r.smaliTotal);
+        assertTrue(r.text.contains("===== smali: Lcom/x/B; ====="));
+    }
+
+    @Test
     public void nulosYVaciosNoLanzan() {
         FullReport.Result r = FullReport.build(null, null, null, null);
         assertNotNull(r.text);
