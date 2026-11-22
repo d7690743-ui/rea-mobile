@@ -19,6 +19,8 @@ public final class DexCalls {
     public static class Edge {
         public String caller = "?";
         public String callee = "?";
+        public String dex = "?";
+        public int pos = -1;
     }
 
     public static class Result {
@@ -31,7 +33,16 @@ public final class DexCalls {
      * Nunca lanza: ante cualquier anomalía devuelve lo acumulado.
      */
     public static Result collect(byte[] dex, String pkgSlash) {
+        return collect(dex, pkgSlash, "?");
+    }
+
+    /**
+     * Variante que etiqueta cada arista con su DEX de origen (p. ej.
+     * "classes2.dex"). Usada por ReaEngine para el RefGraph. Nunca lanza.
+     */
+    public static Result collect(byte[] dex, String pkgSlash, String dexName) {
         Result r = new Result();
+        String tag = dexName == null ? "?" : dexName;
         try {
             if (dex == null || dex.length < 0x70) return r;
             if (dex[0] != 'd' || dex[1] != 'e' || dex[2] != 'x' || dex[3] != '\n') return r;
@@ -100,7 +111,7 @@ public final class DexCalls {
                         int[] rr = readMethod(dex, q);
                         mIdx += rr[0];
                         q = rr[3];
-                        scanned += scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName);
+                        scanned += scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName, tag);
                         if (stop(r, scanned)) return r;
                     }
                     mIdx = 0;
@@ -108,7 +119,7 @@ public final class DexCalls {
                         int[] rr = readMethod(dex, q);
                         mIdx += rr[0];
                         q = rr[3];
-                        scanned += scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName);
+                        scanned += scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName, tag);
                         if (stop(r, scanned)) return r;
                     }
                 } catch (RuntimeException e) {
@@ -151,7 +162,8 @@ public final class DexCalls {
 
     /** Escanea un método; devuelve 1 (método contado) y añade aristas. */
     private static int scanMethod(byte[] dex, Result r, String cls, int mIdx, int codeOff,
-                                  String[] types, String[] strings, int[] mClass, int[] mName) {
+                                  String[] types, String[] strings, int[] mClass, int[] mName,
+                                  String dexName) {
         if (codeOff == 0) return 1;
         check(dex, codeOff, 16);
         int insnsSize = u32(dex, codeOff + 12);
@@ -172,6 +184,8 @@ public final class DexCalls {
                     Edge e = new Edge();
                     e.caller = caller;
                     e.callee = typeAt(types, mClass[idx]) + "->" + get(strings, mName[idx]);
+                    e.dex = dexName;
+                    e.pos = p;
                     r.edges.add(e);
                 }
             }

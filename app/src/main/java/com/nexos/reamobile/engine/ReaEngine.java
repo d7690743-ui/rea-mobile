@@ -133,6 +133,7 @@ public final class ReaEngine {
         public List<String> dexNotes = new ArrayList<>();
         public List<Finding> findings = new ArrayList<>();
         public IntelRegistry intel = new IntelRegistry();
+        public RefGraph graph = new RefGraph();
         public List<String> limitations = new ArrayList<>();
         public List<String> unknowns = new ArrayList<>();
         public String error;
@@ -234,6 +235,35 @@ public final class ReaEngine {
                     shown++;
                 }
                 if (intel.size() > shown) sb.append("  [...").append(intel.size() - shown).append(" mas...]\n");
+            }
+            sb.append("\n=== GRAFO (nodos=").append(graph.nodeCount())
+                    .append(" aristas=").append(graph.edgeCount()).append(") ===");
+            if (graph.truncated()) sb.append(" [recortado]");
+            sb.append('\n');
+            List<String> execCallers = graph.callersOf("Ljava/lang/Runtime;->exec");
+            if (execCallers.isEmpty()) {
+                sb.append("  exec<=(nadie detectado)\n");
+            } else {
+                for (int i = 0; i < execCallers.size() && i < 20; i++) {
+                    sb.append("  exec<=").append(execCallers.get(i)).append('\n');
+                }
+                if (execCallers.size() > 20) {
+                    sb.append("  [...").append(execCallers.size() - 20).append(" mas...]\n");
+                }
+            }
+            for (String top : graph.topCallers(5)) {
+                List<String> out = graph.calleesOf(top);
+                sb.append("  top=").append(top).append(" llama ").append(out.size());
+                int ex = Math.min(3, out.size());
+                if (ex > 0) {
+                    sb.append(" p.ej. [");
+                    for (int i = 0; i < ex; i++) {
+                        if (i > 0) sb.append(", ");
+                        sb.append(out.get(i));
+                    }
+                    sb.append("]");
+                }
+                sb.append('\n');
             }
             return sb.toString();
         }
@@ -488,7 +518,7 @@ public final class ReaEngine {
                     if (di.hasUnity) frameworks.add("Unity");
                     scanStrings(di.strings, urlSet, ipSet, emailSet, secretSet, secretHighSet, counters);
                     collectOwnCalls(r, dexBytes, "?".equals(r.packageName) ? null
-                            : r.packageName.replace('.', '/') + "/", usedPermSet);
+                            : r.packageName.replace('.', '/') + "/", usedPermSet, dexName);
                     for (String s : di.suspicious) {
                         if (suspSet.size() < MAX_SAMPLE) suspSet.add(s);
                     }
@@ -725,9 +755,11 @@ public final class ReaEngine {
         }
     }
 
-    private static void collectOwnCalls(ApkReport r, byte[] dexBytes, String pkgSlash, Set<String> usedPermSet) {
+    private static void collectOwnCalls(ApkReport r, byte[] dexBytes, String pkgSlash, Set<String> usedPermSet,
+                                        String dexName) {
         try {
-            DexCalls.Result cr = DexCalls.collect(dexBytes, pkgSlash);
+            DexCalls.Result cr = DexCalls.collect(dexBytes, pkgSlash, dexName);
+            r.graph.addAll(cr.edges);
             for (DexCalls.Edge e : cr.edges) {
                 int arrow = e.callee.indexOf("->");
                 String cls = arrow < 0 ? e.callee : e.callee.substring(0, arrow);
@@ -1358,6 +1390,36 @@ public final class ReaEngine {
                 inf.evidence = det.isEmpty() ? ev : (ev.isEmpty() ? det : det + " // " + ev);
                 inf.limitations = "convertido de Finding v0.4 (estático)";
                 r.intel.add(inf);
+            }
+            feedIntelGraph(r);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * OMEGA Fase B: cada llamada a API sensible pasa al registro con clase y
+     * método del llamador. Confianza MEDIA (instrucción real) y nunca se afirma
+     * ejecución. Tope 100. Nunca lanza.
+     */
+    static void feedIntelGraph(ApkReport r) {
+        try {
+            if (r == null || r.graph == null || r.intel == null) return;
+            Set<String> seen = new LinkedHashSet<>();
+            int added = 0;
+            for (RefGraph.RefEdge e : r.graph.edges()) {
+                if (added >= 100) break;
+                if (e == null) continue;
+                if (DexParser.suspiciousLabel(e.calleeClass, e.calleeMethod) == null) continue;
+                String key = e.caller + "\u0000" + e.callee;
+                if (!seen.add(key)) continue;
+                IntelFinding inf = IntelFinding.create("grafo", e.caller + " llama a " + e.callee);
+                inf.className = e.callerClass;
+                inf.methodName = e.callerMethod;
+                inf.evidence = "invoke " + e.dex + "@+" + e.pos;
+                inf.confidence = IntelFinding.Confidence.MEDIUM;
+                inf.evidenceType = IntelFinding.EvidenceType.STATIC;
+                inf.limitations = "llamada estática respaldada por instrucción DEX; ejecución no observada";
+                if (r.intel.add(inf)) added++;
             }
         } catch (Throwable ignored) {
         }
