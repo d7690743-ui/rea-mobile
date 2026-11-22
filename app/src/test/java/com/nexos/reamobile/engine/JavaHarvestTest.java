@@ -52,6 +52,19 @@ public class JavaHarvestTest {
     }
 
     @Test
+    public void secretosFormatosYEntropia() {
+        Map<String, String> m = new LinkedHashMap<>();
+        m.put("c.F", "String k = \"7J3k9Q2mZ8vX4pL6sN1bV0cR5tYw\";\n");
+        assertEquals(1, JavaHarvest.findSecrets(m, 50).size());
+        Map<String, String> u = new LinkedHashMap<>();
+        u.put("c.G", "String w = \"https://api.ejemplo.com/v1/player\";\n");
+        assertEquals(0, JavaHarvest.findSecrets(u, 50).size());
+        Map<String, String> g = new LinkedHashMap<>();
+        g.put("c.H", "// token github_pat_abcdefghij1234567890xyz\n");
+        assertEquals(1, JavaHarvest.findSecrets(g, 50).size());
+    }
+
+    @Test
     public void zipIdaYVuelta() {
         JavaHarvest.ZipResult r = JavaHarvest.zip(sample());
         assertNotNull(r.zip);

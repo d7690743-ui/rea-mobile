@@ -37,7 +37,7 @@ public final class ReaEngine {
     private ReaEngine() {
     }
 
-    public static final String VERSION = "0.2";
+    public static final String VERSION = "0.4";
     private static final long MAX_DEX_BYTES = 160L * 1024 * 1024;
     private static final int MAX_SAMPLE = 50;
     private static final int MANIFEST_TEXT_CAP = 6000;
@@ -106,6 +106,26 @@ public final class ReaEngine {
         public List<String> emails = new ArrayList<>();
         public List<String> secretHits = new ArrayList<>();
         public List<String> suspiciousApis = new ArrayList<>();
+        public int secretHighTotal;
+        public List<String> secretHitsHigh = new ArrayList<>();
+        public List<String> suspCalls = new ArrayList<>();
+        public List<String> usedPerms = new ArrayList<>();
+        public List<String> unusedDangerousPerms = new ArrayList<>();
+        public List<String> trackers = new ArrayList<>();
+        public List<String> packers = new ArrayList<>();
+        public String sigScheme = "";
+        public String sigCertSha256 = "";
+        public String sigCertSubject = "";
+        public long libAppSize;
+        public int libAppStrings;
+        public List<String> libAppUrls = new ArrayList<>();
+        public List<String> libAppMarkers = new ArrayList<>();
+        public List<String> manifestBoot = new ArrayList<>();
+        public List<String> manifestIntrusive = new ArrayList<>();
+        public List<String> manifestExported = new ArrayList<>();
+        public List<String> manifestLinks = new ArrayList<>();
+        public List<String> manifestHygiene = new ArrayList<>();
+        public String summary = "";
         public String manifestXml = "";
         public String manifestNote = "";
         public List<String> dexNotes = new ArrayList<>();
@@ -127,6 +147,7 @@ public final class ReaEngine {
             sb.append("sha1=").append(sha1).append('\n');
             sb.append("sha256=").append(sha256).append('\n');
             sb.append("package=").append(packageName).append('\n');
+            sb.append("resumen=").append(summary).append('\n');
             if (error != null) sb.append("ERROR=").append(error).append('\n');
             sb.append("\n=== INVENTARIO ===\n");
             sb.append("entradas=").append(entryCount)
@@ -142,12 +163,22 @@ public final class ReaEngine {
             sb.append("api=").append(apiStats).append('\n');
             sb.append("nativas=").append(nativeLibs).append('\n');
             sb.append("frameworks=").append(frameworks).append('\n');
+            sb.append("trackers=").append(trackers).append('\n');
+            sb.append("packers=").append(packers).append('\n');
+            if (libAppSize > 0) {
+                sb.append("libapp=").append(libAppSize).append(" B, strings=")
+                        .append(libAppStrings).append(" marcadores=").append(libAppMarkers).append('\n');
+                dumpList(sb, "libappUrl", libAppUrls);
+            }
             sb.append("arscStrings=").append(arscStringCount)
                     .append(arscTruncated ? " (muestra)" : "").append('\n');
             for (String n : dexNotes) sb.append("notaDex=").append(n).append('\n');
             sb.append("\n=== FIRMA ===\n");
             sb.append("certificados=").append(certFiles).append('\n');
             for (String s : certSubjects) sb.append("  sujeto=").append(s).append('\n');
+            if (!sigScheme.isEmpty()) sb.append("esquema=").append(sigScheme).append('\n');
+            if (!sigCertSha256.isEmpty()) sb.append("certSHA256=").append(sigCertSha256).append('\n');
+            if (!sigCertSubject.isEmpty()) sb.append("certSujeto=").append(sigCertSubject).append('\n');
             sb.append("\n=== MANIFEST (").append(manifestNote).append(") ===\n");
             sb.append("permisos(").append(manifestPerms.size()).append(")\n");
             for (String p : manifestPerms) sb.append("  - ").append(p).append('\n');
@@ -155,18 +186,29 @@ public final class ReaEngine {
                     .append(" servicios=").append(manifestServices)
                     .append(" receptores=").append(manifestReceivers)
                     .append(" proveedores=").append(manifestProviders).append('\n');
+            dumpList(sb, "autoarranque", manifestBoot);
+            dumpList(sb, "intrusivo", manifestIntrusive);
+            dumpList(sb, "exportado", manifestExported);
+            dumpList(sb, "deeplink", manifestLinks);
+            dumpList(sb, "higiene", manifestHygiene);
             sb.append("--- xml (extracto) ---\n");
             sb.append(manifestXml.length() > MANIFEST_TEXT_CAP
                     ? manifestXml.substring(0, MANIFEST_TEXT_CAP) + "\n[...recortado...]\n" : manifestXml);
             if (!manifestXml.endsWith("\n")) sb.append('\n');
             sb.append("\n=== INDICIOS ===\n");
             sb.append("urls=").append(urlTotal).append(" ips=").append(ipTotal)
-                    .append(" emails=").append(emailTotal).append(" secretos=").append(secretTotal).append('\n');
+                    .append(" emails=").append(emailTotal).append(" secretos=").append(secretTotal)
+                    .append(" secretosAlta=").append(secretHighTotal).append('\n');
             dumpList(sb, "url", urls);
             dumpList(sb, "ip", ips);
             dumpList(sb, "email", emails);
             dumpList(sb, "secreto?", secretHits);
+            dumpList(sb, "secreto+", secretHitsHigh);
             dumpList(sb, "apiSensible", suspiciousApis);
+            sb.append("\n=== LLAMADAS DE CODIGO PROPIO ===\n");
+            dumpList(sb, "llama", suspCalls);
+            dumpList(sb, "permisoUsado", usedPerms);
+            dumpList(sb, "permisoSobrante?", unusedDangerousPerms);
             sb.append("\n=== HALLAZGOS (con evidencia) ===\n");
             for (Finding f : findings) {
                 sb.append('[').append(f.section).append("] ").append(f.title).append('\n');
@@ -198,6 +240,7 @@ public final class ReaEngine {
             jsonField(sb, "sha1", sha1, false);
             jsonField(sb, "sha256", sha256, false);
             jsonField(sb, "package", packageName, false);
+            jsonField(sb, "summary", summary, false);
             sb.append(",\"entries\":").append(entryCount);
             sb.append(",\"strings\":").append(totalStrings);
             sb.append(",\"classes\":").append(totalClasses);
@@ -214,7 +257,26 @@ public final class ReaEngine {
             jsonStrList(sb, "urls", urls);
             jsonStrList(sb, "ips", ips);
             jsonStrList(sb, "secretHits", secretHits);
+            sb.append(",\"secretHighTotal\":").append(secretHighTotal);
+            jsonStrList(sb, "secretHitsHigh", secretHitsHigh);
             jsonStrList(sb, "suspiciousApis", suspiciousApis);
+            jsonStrList(sb, "suspCalls", suspCalls);
+            jsonStrList(sb, "usedPerms", usedPerms);
+            jsonStrList(sb, "unusedDangerousPerms", unusedDangerousPerms);
+            jsonStrList(sb, "trackers", trackers);
+            jsonStrList(sb, "packers", packers);
+            jsonField(sb, "sigScheme", sigScheme, false);
+            jsonField(sb, "sigCertSha256", sigCertSha256, false);
+            jsonField(sb, "sigCertSubject", sigCertSubject, false);
+            sb.append(",\"libAppSize\":").append(libAppSize);
+            sb.append(",\"libAppStrings\":").append(libAppStrings);
+            jsonStrList(sb, "libAppUrls", libAppUrls);
+            jsonStrList(sb, "libAppMarkers", libAppMarkers);
+            jsonStrList(sb, "manifestBoot", manifestBoot);
+            jsonStrList(sb, "manifestIntrusive", manifestIntrusive);
+            jsonStrList(sb, "manifestExported", manifestExported);
+            jsonStrList(sb, "manifestLinks", manifestLinks);
+            jsonStrList(sb, "manifestHygiene", manifestHygiene);
             sb.append(",\"apiStats\":{");
             boolean first = true;
             for (Map.Entry<String, Integer> e : apiStats.entrySet()) {
@@ -299,14 +361,25 @@ public final class ReaEngine {
             r.fileName = apk.getName();
             r.fileSize = apk.length();
             hashFile(apk, r);
-            r.apkSigBlock = hasApkSigBlock(apk);
+            ApkSigBlock.SigInfo sig = ApkSigBlock.parse(apk);
+            if (sig.cert != null) {
+                r.apkSigBlock = true;
+                r.sigScheme = sig.scheme;
+                r.sigCertSha256 = hex(sha256bytes(sig.cert));
+                r.sigCertSubject = certSubjectDer(sig.cert);
+            } else {
+                r.apkSigBlock = hasApkSigBlock(apk);
+            }
 
             Set<String> urlSet = new LinkedHashSet<>();
             Set<String> ipSet = new LinkedHashSet<>();
             Set<String> emailSet = new LinkedHashSet<>();
             Set<String> secretSet = new LinkedHashSet<>();
+            Set<String> secretHighSet = new LinkedHashSet<>();
             Set<String> suspSet = new LinkedHashSet<>();
-            int[] counters = new int[4]; // url, ip, email, secret
+            Set<String> usedPermSet = new LinkedHashSet<>();
+            Set<String> packerSet = new LinkedHashSet<>();
+            int[] counters = new int[5]; // url, ip, email, secret, secretAlta
             Set<String> frameworks = new LinkedHashSet<>();
             Map<String, Integer> pkgCounts = new LinkedHashMap<>();
             long obfWeighted = 0;
@@ -334,6 +407,8 @@ public final class ReaEngine {
                     else if (name.startsWith("res/")) r.resCount++;
                     else if (name.startsWith("assets/")) r.assetCount++;
                     detectFrameworkByName(name, frameworks);
+                    String pkFile = PackerMarkers.matchFile(name);
+                    if (pkFile != null && packerSet.size() < 20) packerSet.add(pkFile + " [" + name + "]");
                 }
 
                 // Manifest.
@@ -348,6 +423,12 @@ public final class ReaEngine {
                     r.manifestProviders = AxmlDecoder.countTag(xml, "provider");
                     r.manifestNote = xml.isEmpty() ? "vacío" : (xml.length() + " caracteres");
                     if (xml.isEmpty()) r.manifestNote = "no decodificado";
+                    ManifestChecks.Result mc = ManifestChecks.check(xml, r.manifestPerms);
+                    r.manifestBoot.addAll(mc.bootReceivers);
+                    r.manifestIntrusive.addAll(mc.intrusivePerms);
+                    r.manifestExported.addAll(mc.exported);
+                    r.manifestLinks.addAll(mc.deepLinks);
+                    r.manifestHygiene.addAll(mc.hygiene);
                 } else {
                     r.manifestNote = "ausente";
                 }
@@ -382,12 +463,16 @@ public final class ReaEngine {
                             r.appClassTotal++;
                             if (r.appClasses.size() < 5000) r.appClasses.add(ci.name);
                         }
+                        String pkCls = PackerMarkers.matchClass(ci.name);
+                        if (pkCls != null && packerSet.size() < 20) packerSet.add(pkCls + " [" + ci.name + "]");
                     }
                     if (di.hasKotlin) frameworks.add("Kotlin");
                     if (di.hasAndroidx) frameworks.add("AndroidX/Jetpack");
                     if (di.hasGms) frameworks.add("Google/GMS");
                     if (di.hasUnity) frameworks.add("Unity");
-                    scanStrings(di.strings, urlSet, ipSet, emailSet, secretSet, counters);
+                    scanStrings(di.strings, urlSet, ipSet, emailSet, secretSet, secretHighSet, counters);
+                    collectOwnCalls(r, dexBytes, "?".equals(r.packageName) ? null
+                            : r.packageName.replace('.', '/') + "/", usedPermSet);
                     for (String s : di.suspicious) {
                         if (suspSet.size() < MAX_SAMPLE) suspSet.add(s);
                     }
@@ -405,16 +490,43 @@ public final class ReaEngine {
                     } else {
                         r.arscStringCount = ai.stringCount;
                         r.arscTruncated = ai.truncated;
-                        scanStrings(ai.strings, urlSet, ipSet, emailSet, secretSet, counters);
+                        scanStrings(ai.strings, urlSet, ipSet, emailSet, secretSet, secretHighSet, counters);
                     }
                 }
 
-                // Nativas: inventario + arquitectura por cabecera ELF.
+                // Nativas: inventario + arquitectura por cabecera ELF + etiqueta conocida.
                 for (String so : soNames) {
                     ZipEntry e = zip.getEntry(so);
                     byte[] head = e == null ? null : readPrefix(zip, e, 64);
-                    r.nativeLibs.add(so + " (" + elfArch(head) + ")");
+                    String tag = NativeTable.classify(so);
+                    r.nativeLibs.add(so + " (" + elfArch(head) + ")"
+                            + (tag == null ? "" : " [" + tag + "]"));
                     if (r.nativeLibs.size() >= 100) break;
+                }
+                // Flutter AOT: tamaño y strings de libapp.so.
+                String libapp = pickLibApp(soNames);
+                if (libapp != null) {
+                    ZipEntry e = zip.getEntry(libapp);
+                    if (e != null) {
+                        r.libAppSize = Math.max(0, e.getSize());
+                        InputStream lin = null;
+                        try {
+                            lin = zip.getInputStream(e);
+                            LibAppScan.Result lr = LibAppScan.scan(lin, LibAppScan.MAX_BYTES);
+                            r.libAppStrings = lr.stringCount;
+                            r.libAppUrls.addAll(lr.urls);
+                            r.libAppMarkers.addAll(lr.markers);
+                            if (lr.truncated) r.dexNotes.add("libapp.so: muestra parcial (tope)");
+                        } catch (Throwable ignored) {
+                        } finally {
+                            if (lin != null) {
+                                try {
+                                    lin.close();
+                                } catch (Throwable ignored) {
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Certificados: sujetos X.509.
@@ -439,13 +551,29 @@ public final class ReaEngine {
             r.ips.addAll(cap(ipSet));
             r.emails.addAll(cap(emailSet));
             r.secretHits.addAll(cap(secretSet));
+            r.secretHitsHigh.addAll(cap(secretHighSet));
             r.suspiciousApis.addAll(suspSet);
             r.urlTotal = counters[0];
             r.ipTotal = counters[1];
             r.emailTotal = counters[2];
             r.secretTotal = counters[3];
+            r.secretHighTotal = counters[4];
             r.topPackages = topCounts(pkgCounts, 8);
             r.topHosts = topHosts(urlSet, 8);
+            for (String k : pkgCounts.keySet()) {
+                String t = TrackerTable.match(k);
+                if (t != null && !r.trackers.contains(t) && r.trackers.size() < 20) r.trackers.add(t);
+            }
+            r.packers.addAll(packerSet);
+            r.usedPerms.addAll(usedPermSet);
+            for (String p : r.manifestPerms) {
+                String s = p;
+                int dot = p.lastIndexOf('.');
+                if (dot >= 0) s = p.substring(dot + 1);
+                if (PermApiTable.isRisky(p) && !usedPermSet.contains(s)
+                        && r.unusedDangerousPerms.size() < 20) r.unusedDangerousPerms.add(s);
+            }
+            r.summary = buildSummary(r);
 
             buildFindings(r);
             finishStatic(r);
@@ -477,7 +605,8 @@ public final class ReaEngine {
     }
 
     private static void scanStrings(Collection<String> strings, Set<String> urls, Set<String> ips,
-                                     Set<String> emails, Set<String> secrets, int[] counters) {
+                                     Set<String> emails, Set<String> secrets, Set<String> secretsHigh,
+                                     int[] counters) {
         for (String s : strings) {
             if (s == null || s.isEmpty()) continue;
             Matcher mu = URL_RE.matcher(s);
@@ -511,6 +640,14 @@ public final class ReaEngine {
                     counters[3]++;
                     if (secrets.size() < MAX_SAMPLE) secrets.add(s.trim());
                 }
+                List<String> highIds = SecretRules.match(s);
+                if (!highIds.isEmpty()) {
+                    counters[4]++;
+                    if (secretsHigh.size() < MAX_SAMPLE) secretsHigh.add(highIds.get(0) + ": " + s.trim());
+                } else if (SecretRules.isTokenLike(s)) {
+                    counters[4]++;
+                    if (secretsHigh.size() < MAX_SAMPLE) secretsHigh.add("entropia: " + s.trim());
+                }
             }
         }
     }
@@ -534,6 +671,103 @@ public final class ReaEngine {
             }
         } catch (RuntimeException e) {
             return "?";
+        }
+    }
+
+    private static byte[] sha256bytes(byte[] data) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(data);
+        } catch (Exception e) {
+            return new byte[0];
+        }
+    }
+
+    private static String certSubjectDer(byte[] der) {
+        try {
+            CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            Certificate c = cf.generateCertificate(new ByteArrayInputStream(der));
+            if (c instanceof X509Certificate) {
+                X509Certificate x = (X509Certificate) c;
+                return x.getSubjectX500Principal().getName() + " | serie=" + x.getSerialNumber();
+            }
+        } catch (Exception ignored) {
+        }
+        return "";
+    }
+
+    private static String pickLibApp(List<String> soNames) {
+        try {
+            String fallback = null;
+            for (String so : soNames) {
+                if (so == null || !so.endsWith("libapp.so")) continue;
+                if (so.contains("arm64-v8a")) return so;
+                if (fallback == null) fallback = so;
+            }
+            return fallback;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static void collectOwnCalls(ApkReport r, byte[] dexBytes, String pkgSlash, Set<String> usedPermSet) {
+        try {
+            DexCalls.Result cr = DexCalls.collect(dexBytes, pkgSlash);
+            for (DexCalls.Edge e : cr.edges) {
+                int arrow = e.callee.indexOf("->");
+                String cls = arrow < 0 ? e.callee : e.callee.substring(0, arrow);
+                String name = arrow < 0 ? "" : e.callee.substring(arrow + 2);
+                if (DexParser.suspiciousLabel(cls, name) != null && r.suspCalls.size() < MAX_SAMPLE) {
+                    r.suspCalls.add(e.caller + "  ->  " + e.callee);
+                }
+                String perm = PermApiTable.permissionFor(e.callee);
+                if (perm != null && usedPermSet.size() < 60) usedPermSet.add(perm);
+            }
+            if (cr.truncated) r.dexNotes.add("llamadas: topes alcanzados (muestra parcial)");
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Resumen de una línea para la cabecera del informe. Nunca lanza. */
+    static String buildSummary(ApkReport r) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            if (r.frameworks.isEmpty()) sb.append("?");
+            else {
+                for (int i = 0; i < Math.min(3, r.frameworks.size()); i++) {
+                    if (i > 0) sb.append(" + ");
+                    sb.append(r.frameworks.get(i));
+                }
+            }
+            List<String> tags = new ArrayList<>();
+            for (String n : r.nativeLibs) {
+                int a = n.indexOf('[');
+                int b = n.indexOf(']', a + 1);
+                if (a >= 0 && b > a && tags.size() < 2) {
+                    String t = n.substring(a + 1, b);
+                    if (!tags.contains(t)) tags.add(t);
+                }
+            }
+            for (String t : tags) sb.append(" + ").append(t);
+            int risky = 0;
+            for (String p : r.manifestPerms) {
+                if (PermApiTable.isRisky(p)) risky++;
+            }
+            sb.append(" | ").append(r.manifestPerms.size()).append(" permisos (")
+                    .append(risky).append(" de riesgo)");
+            if (r.secretHighTotal > 0) {
+                sb.append(" | ").append(r.secretHighTotal).append(" secreto(s) alta");
+            }
+            if (!r.manifestBoot.isEmpty()) sb.append(" | autoarranque");
+            if (!r.manifestIntrusive.isEmpty()) {
+                sb.append(" | ").append(r.manifestIntrusive.size()).append(" intrusivo(s)");
+            }
+            if (!r.sigScheme.isEmpty()) sb.append(" | firma ").append(r.sigScheme);
+            if (!r.trackers.isEmpty()) sb.append(" | ").append(r.trackers.size()).append(" tracker(s)");
+            if (!r.packers.isEmpty()) sb.append(" | protector");
+            if (r.libAppSize > 0) sb.append(" | libapp ").append(r.libAppSize / 1024).append(" KB");
+            return sb.toString();
+        } catch (Throwable t) {
+            return "";
         }
     }
 
@@ -705,6 +939,20 @@ public final class ReaEngine {
                 r.smaliClasses = smali.classes.size();
                 r.notes.addAll(smali.notes);
                 if (smali.truncated) r.notes.add("smali: recortado por topes");
+                ManifestChecks.Result bootMc = ManifestChecks.check(manifestXml, null);
+                for (String b : bootMc.bootReceivers) {
+                    String clsName = b.split(" ")[0];
+                    String fq = clsName.startsWith(".") && !"?".equals(pkg) ? pkg + clsName : clsName;
+                    if (fq.startsWith("?")) continue;
+                    String want = "smali/" + fq.replace('.', '/') + ".smali";
+                    for (SmaliDumper.SmaliClass sc : smali.classes) {
+                        if (want.equals(sc.path) && (sc.text.contains("startActivity")
+                                || sc.text.contains("getLaunchIntentForPackage"))) {
+                            r.notes.add("autoarranque: " + fq + " lanza actividad (smali)");
+                            break;
+                        }
+                    }
+                }
                 List<String> dexStrings = new ArrayList<>();
                 for (byte[] b : dexBytes) {
                     DexParser.DexInfo di = DexParser.parse(b, "dex");
@@ -978,8 +1226,14 @@ public final class ReaEngine {
                     "archivos=" + r.certFiles);
         }
         if (r.apkSigBlock) {
+            String det = "Firma moderna fuera del ZIP visible.";
+            if (!r.sigScheme.isEmpty()) {
+                det = "Esquema " + r.sigScheme
+                        + (r.sigCertSubject.isEmpty() ? "" : "; " + r.sigCertSubject);
+            }
             r.finding("firma", "Bloque de firma APK v2/v3+ presente",
-                    "Firma moderna fuera del ZIP visible.", "magia \"APK Sig Block 42\"");
+                    det, "magia \"APK Sig Block 42\""
+                            + (r.sigCertSha256.isEmpty() ? "" : "; sha256=" + r.sigCertSha256));
         }
         if (!r.frameworks.isEmpty()) {
             r.finding("frameworks", "Tecnologías: " + r.frameworks,
@@ -1009,9 +1263,18 @@ public final class ReaEngine {
                     "Revisar manualmente: son coincidencias por palabra, no confirmaciones.",
                     "DEX + ARSC");
         }
+        if (r.secretHighTotal > 0) {
+            r.finding("secretos", r.secretHighTotal + " secreto(s) de ALTA confianza",
+                    r.secretHitsHigh.isEmpty() ? "-" : r.secretHitsHigh.get(0),
+                    "formato de clave o entropía (DEX + ARSC)");
+        }
         if (!r.suspiciousApis.isEmpty()) {
             r.finding("apis", r.suspiciousApis.size() + "+ referencia(s) a API sensible (muestra)",
                     r.suspiciousApis.get(0), "method_ids del DEX");
+        }
+        if (!r.suspCalls.isEmpty()) {
+            r.finding("apis", r.suspCalls.size() + " llamada(s) sensible(s) desde código propio",
+                    r.suspCalls.get(0), "code_item del DEX (DexCalls)");
         }
         if (!r.manifestPerms.isEmpty()) {
             r.finding("permisos", r.manifestPerms.size() + " permiso(s) declarados",
@@ -1019,11 +1282,53 @@ public final class ReaEngine {
                             + r.manifestReceivers + " receptores, " + r.manifestProviders + " proveedores.",
                     "AndroidManifest.xml decodificado");
         }
+        if (!r.unusedDangerousPerms.isEmpty()) {
+            r.finding("permisos", "Posibles permisos sobrantes: " + r.unusedDangerousPerms,
+                    "De riesgo y sin llamada detectada que los ampare.",
+                    "manifest + llamadas propias");
+        }
+        if (!r.manifestBoot.isEmpty()) {
+            r.finding("persistencia", "Autoarranque tras reinicio: " + r.manifestBoot,
+                    "Receptor con BOOT_COMPLETED; revisar si lanza actividad o servicio.",
+                    "AndroidManifest.xml decodificado");
+        }
+        if (!r.manifestIntrusive.isEmpty()) {
+            r.finding("privacidad", r.manifestIntrusive.size() + " permiso(s)/componente(s) intrusivo(s)",
+                    r.manifestIntrusive.size() > 3
+                            ? r.manifestIntrusive.subList(0, 3) + "…" : r.manifestIntrusive.toString(),
+                    "AndroidManifest.xml decodificado");
+        }
+        if (!r.manifestHygiene.isEmpty()) {
+            r.finding("higiene", "Avisos de manifest: " + r.manifestHygiene,
+                    "Banderas de application a revisar.", "AndroidManifest.xml decodificado");
+        }
+        if (!r.manifestLinks.isEmpty()) {
+            r.finding("superficie", r.manifestLinks.size() + " deep link(s)",
+                    r.manifestLinks.size() > 3
+                            ? r.manifestLinks.subList(0, 3) + "…" : r.manifestLinks.toString(),
+                    "etiquetas <data> del manifest");
+        }
+        if (!r.trackers.isEmpty()) {
+            r.finding("trackers", r.trackers.size() + " SDK/tracker(s): " + r.trackers,
+                    "Detectados por prefijo de paquete.", "clases del DEX");
+        }
+        if (!r.packers.isEmpty()) {
+            r.finding("protector", "Marcadores: " + r.packers,
+                    "Posible protector, empaquetador o instrumentación.",
+                    "nombres de fichero/clase");
+        }
+        if (r.libAppSize > 0) {
+            r.finding("flutter", "libapp.so: " + r.libAppSize + " bytes, " + r.libAppStrings + " strings",
+                    r.libAppUrls.isEmpty() ? "marcadores=" + r.libAppMarkers
+                            : r.libAppUrls.get(0) + (r.libAppUrls.size() > 1
+                            ? " (+" + (r.libAppUrls.size() - 1) + ")" : ""),
+                    "escaneo de strings en libapp.so");
+        }
     }
 
     private static void finishStatic(ApkReport r) {
         r.limitations.add("Java bajo demanda en el visor (JADX on-device con topes); el informe base no incluye fuentes.");
-        r.limitations.add("Sin referencias cruzadas completas (xrefs): solo firmas, conteos y stats por paquete.");
+        r.limitations.add("Xrefs parciales: llamadas de código propio (DexCalls) sin flujo inter-procedural completo.");
         r.limitations.add("Sin análisis dinámico (Frida/adb): estático únicamente.");
         r.limitations.add("AXML y ARSC decodificados con parser propio (best-effort).");
         r.limitations.add("Nativas: solo inventario y arquitectura ELF, sin desensamblado.");

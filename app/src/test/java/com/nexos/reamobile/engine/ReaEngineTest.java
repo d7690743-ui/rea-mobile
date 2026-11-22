@@ -37,6 +37,20 @@ public class ReaEngineTest {
     }
 
     @Test
+    public void resumenUnaLinea() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        r.frameworks.add("Flutter/Dart");
+        r.nativeLibs.add("lib/arm64-v8a/libllama.so (ARM64) [LLM local (llama.cpp)]");
+        r.manifestPerms.add("android.permission.INTERNET");
+        r.manifestPerms.add("android.permission.RECORD_AUDIO");
+        r.secretHighTotal = 2;
+        assertEquals("Flutter/Dart + LLM local (llama.cpp) | 2 permisos (1 de riesgo)"
+                + " | 2 secreto(s) alta", ReaEngine.buildSummary(r));
+        ReaEngine.ApkReport vacio = new ReaEngine.ApkReport();
+        assertEquals("? | 0 permisos (0 de riesgo)", ReaEngine.buildSummary(vacio));
+    }
+
+    @Test
     public void bloqueFirmaV2Detecta() throws Exception {
         File con = new File(tmp.getRoot(), "con.apk");
         writeMiniZip(con, true);

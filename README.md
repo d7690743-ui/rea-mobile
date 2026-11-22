@@ -5,6 +5,21 @@ Análisis estático de APK 100% on-device, inspirado en
 solo-Android [REA-ReverseEngineerAndroid](https://github.com/Hubupup/REA-ReverseEngineerAndroid).
 Código del motor escrito desde cero en Java/Kotlin; sin dependencias externas.
 
+## Novedades v0.4
+
+- Secretos en dos niveles: reglas por formato estilo Gitleaks + entropía
+  de Shannon (`SecretRules`); alta confianza también en Java descompilado.
+- Llamadas de código propio (`DexCalls`): qué API sensible invoca cada
+  clase + permisos usados frente a declarados (`PermApiTable`).
+- Firma v2/v3: certificado del firmante desde el bloque de firma
+  (`ApkSigBlock`, esquema + SHA-256 + sujeto).
+- Nativas clasificadas (`NativeTable`), escaneo de `libapp.so` en apps
+  Flutter (`LibAppScan`), trackers (`TrackerTable`) y protectores
+  (`PackerMarkers`).
+- Manifest: autoarranque, permisos intrusivos, exportados, deep links e
+  higiene (`ManifestChecks`); resumen de una línea al inicio del informe.
+- Botón Compartir ZIP (`ZipShareProvider`, solo framework).
+
 ## Novedades v0.3
 
 - Adaptador JADX por lotes: filtro por paquete, tope de clases y progreso

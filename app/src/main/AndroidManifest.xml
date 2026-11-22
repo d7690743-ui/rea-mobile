@@ -19,5 +19,10 @@
         <activity
             android:name=".CodeViewerActivity"
             android:exported="false" />
+        <provider
+            android:name=".ZipShareProvider"
+            android:authorities="com.nexos.reamobile.zipshare"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

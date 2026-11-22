@@ -17,6 +17,7 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import com.nexos.reamobile.engine.ReaEngine
 import java.io.File
 import java.io.FileInputStream
@@ -30,6 +31,7 @@ class MainActivity : Activity() {
     private lateinit var btnPick: Button
     private lateinit var btnShare: Button
     private lateinit var btnExtract: Button
+    private lateinit var btnShareZip: Button
     private lateinit var btnView: Button
     private lateinit var progress: ProgressBar
     private var lastReport: String = ""
@@ -56,6 +58,10 @@ class MainActivity : Activity() {
             text = "Extraer ZIP (árbol + smali)"
             isEnabled = false
         }
+        btnShareZip = Button(this).apply {
+            text = "Compartir ZIP"
+            isEnabled = false
+        }
         btnView = Button(this).apply {
             text = "Ver código"
             isEnabled = false
@@ -75,6 +81,7 @@ class MainActivity : Activity() {
         root.addView(btnPick)
         root.addView(btnShare)
         root.addView(btnExtract)
+        root.addView(btnShareZip)
         root.addView(btnView)
         root.addView(progress)
         root.addView(
@@ -86,6 +93,7 @@ class MainActivity : Activity() {
         btnPick.setOnClickListener { if (!analyzing) openPicker() }
         btnShare.setOnClickListener { shareReport() }
         btnExtract.setOnClickListener { extractZip() }
+        btnShareZip.setOnClickListener { shareZip() }
         btnView.setOnClickListener { openViewer() }
         showDisclaimerOnce()
     }
@@ -146,6 +154,7 @@ class MainActivity : Activity() {
         analyzing = true
         btnShare.isEnabled = false
         btnExtract.isEnabled = false
+        btnShareZip.isEnabled = false
         btnView.isEnabled = false
         progress.visibility = View.VISIBLE
         txt.text = "Analizando…"
@@ -194,6 +203,7 @@ class MainActivity : Activity() {
         btnPick.isEnabled = false
         btnShare.isEnabled = false
         btnExtract.isEnabled = false
+        btnShareZip.isEnabled = false
         progress.visibility = View.VISIBLE
         txt.text = "Extrayendo…"
         Thread {
@@ -206,6 +216,7 @@ class MainActivity : Activity() {
                 val summary = "ZIP guardado: " + dest + "\n\n" + res.summary()
                 runOnUiThread {
                     txt.text = summary + "\n" + lastReport
+                    btnShareZip.isEnabled = true
                     progress.visibility = View.GONE
                 }
             } catch (t: OutOfMemoryError) {
@@ -327,5 +338,23 @@ class MainActivity : Activity() {
             putExtra(Intent.EXTRA_TEXT, lastReport)
         }
         startActivity(Intent.createChooser(i, "Compartir informe"))
+    }
+
+    private fun shareZip() {
+        try {
+            val zip = File(cacheDir, ZipShareProvider.FILE_NAME)
+            if (!zip.isFile()) {
+                Toast.makeText(this, "Sin ZIP: usa Extraer primero", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val i = Intent(Intent.ACTION_SEND).apply {
+                type = "application/zip"
+                putExtra(Intent.EXTRA_STREAM, ZipShareProvider.zipUri())
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(i, "Compartir ZIP"))
+        } catch (t: Throwable) {
+            Toast.makeText(this, "No se pudo compartir: ${t.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 }

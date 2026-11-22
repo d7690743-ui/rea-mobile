@@ -111,7 +111,8 @@ public final class JavaHarvest {
             } catch (Throwable ignored) {
             }
         }
-        return false;
+        if (!SecretRules.match(ln).isEmpty()) return true;
+        return SecretRules.hasEntropyToken(ln);
     }
 
     private static String snippet(String ln) {

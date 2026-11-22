@@ -285,12 +285,19 @@ public final class DexParser {
 
     private static void matchSuspicious(DexInfo info, String cls, String name) {
         if (info.suspicious.size() >= MAX_SUSPICIOUS) return;
-        for (String[] pat : SUSPICIOUS_PATTERNS) {
-            if (cls.startsWith(pat[0]) && (pat[1] == null || name.contains(pat[1]))) {
-                info.suspicious.add(cls + "->" + name);
-                return;
+        if (suspiciousLabel(cls, name) != null) info.suspicious.add(cls + "->" + name);
+    }
+
+    /** Prefijo de API sensible que casa con cls->name, o null. Nunca lanza. */
+    static String suspiciousLabel(String cls, String name) {
+        try {
+            if (cls == null || name == null) return null;
+            for (String[] pat : SUSPICIOUS_PATTERNS) {
+                if (cls.startsWith(pat[0]) && (pat[1] == null || name.contains(pat[1]))) return pat[0];
             }
+        } catch (Throwable ignored) {
         }
+        return null;
     }
 
     private static boolean isShortName(String cls) {
