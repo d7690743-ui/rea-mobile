@@ -353,6 +353,16 @@ public final class ReaEngine {
                     sb.append('\n');
                 }
             }
+            SearchPlan.Plan plan = SearchPlan.build(this);
+            sb.append("\n=== COBERTURA (perfil=").append(plan.profile.label).append(") ===\n");
+            if (plan.note != null && !plan.note.isEmpty()) {
+                sb.append("  nota=").append(plan.note).append('\n');
+            }
+            for (SearchPlan.CheckState c : plan.checks) {
+                if (c == null) continue;
+                sb.append("  check=").append(c.id).append(' ').append(c.state)
+                        .append(' ').append(c.detail).append('\n');
+            }
             return sb.toString();
         }
 
@@ -471,6 +481,19 @@ public final class ReaEngine {
                     jsonQuoted(sb, role.label);
                 }
                 sb.append(']');
+            }
+            sb.append('}');
+            SearchPlan.Plan plan = SearchPlan.build(this);
+            jsonField(sb, "profile", plan.profile.label, false);
+            sb.append(",\"coverage\":{");
+            boolean firstCov = true;
+            for (SearchPlan.CheckState c : plan.checks) {
+                if (c == null) continue;
+                if (!firstCov) sb.append(',');
+                firstCov = false;
+                jsonQuoted(sb, c.id);
+                sb.append(':');
+                jsonQuoted(sb, c.state == null ? "?" : c.state.name());
             }
             sb.append('}');
             sb.append('}');
@@ -1641,6 +1664,7 @@ public final class ReaEngine {
             feedIntelGraph(r);
             feedIntelRed(r);
             feedIntelRoles(r);
+            feedIntelPlan(r);
         } catch (Throwable ignored) {
         }
     }
@@ -1816,6 +1840,51 @@ public final class ReaEngine {
                     if (r.intel.add(inf)) added++;
                 }
             }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * OMEGA plan RAG: un hallazgo con el perfil y el recuento de estados.
+     * Nunca lanza.
+     */
+    static void feedIntelPlan(ApkReport r) {
+        try {
+            if (r == null || r.intel == null) return;
+            if (r.fileSize <= 0 && (r.sha256 == null || r.sha256.length() < 32)) return;
+            SearchPlan.Plan plan = SearchPlan.build(r);
+            int found = 0;
+            int partial = 0;
+            int missing = 0;
+            int unsupported = 0;
+            for (SearchPlan.CheckState c : plan.checks) {
+                if (c == null || c.state == null) continue;
+                switch (c.state) {
+                    case FOUND:
+                        found++;
+                        break;
+                    case PARTIAL:
+                        partial++;
+                        break;
+                    case NOT_FOUND_IN_SCOPE:
+                        missing++;
+                        break;
+                    case UNSUPPORTED:
+                    case NOT_EXECUTED:
+                        unsupported++;
+                        break;
+                    default:
+                        break;
+                }
+            }
+            IntelFinding inf = IntelFinding.create("perfil",
+                    "Perfil de análisis: " + plan.profile.label);
+            inf.evidence = plan.checks.size() + " checks: " + found + " FOUND, " + partial
+                    + " PARTIAL, " + missing + " NOT_FOUND, " + unsupported + " NO-EJECUTADO";
+            inf.confidence = IntelFinding.Confidence.HIGH;
+            inf.evidenceType = IntelFinding.EvidenceType.STATIC;
+            inf.limitations = "cobertura declarada por el propio analizador";
+            r.intel.add(inf);
         } catch (Throwable ignored) {
         }
     }

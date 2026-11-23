@@ -37,7 +37,7 @@ salvo indicación. Nada aquí se declara sin su prueba o medición.
 
 ## Pendiente (no prometido)
 
-- F3.2 tipos, F3.3 SSA-lite, F3.4 estructuración, F3.5 emisor.
+- F3.3 SSA-lite, F3.4 estructuración, F3.5 emisor. (F3.2 tipos: hecho.)
 - Validación en dispositivo del descompilado Java v0.3.2 (usuario).
 
 Nota v0.3.2: APK intenta carga completa (125 java, 0 err) y si aborta

@@ -172,6 +172,26 @@ public class ReaEngineTest {
     }
 
     @Test
+    public void coberturaInformeYRegistro() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        r.sha256 = "fa973ab965632ca5d0d93683e9bc5d82dd60f9b82fec8ca9fa3aba1de408ef57";
+        r.fileSize = 258961610L;
+        r.nativeLibs.add("lib/arm64-v8a/libchrome.so (ARM64)");
+        r.totalClasses = 5649;
+        r.obfuscatedRatio = 0.41;
+        String txt = r.toText();
+        assertTrue(txt, txt.contains("=== COBERTURA (perfil=framework) ==="));
+        assertTrue(txt, txt.contains("check=taint UNSUPPORTED"));
+        assertTrue(txt, txt.contains("check=nativas PARTIAL"));
+        ReaEngine.feedIntel(r);
+        String txt2 = r.toText();
+        assertTrue(txt2, txt2.contains("[perfil]"));
+        String js = r.toJson();
+        assertTrue(js, js.contains("\"profile\":\"framework\""));
+        assertTrue(js, js.contains("\"coverage\":{"));
+    }
+
+    @Test
     public void puenteIntel() {
         ReaEngine.ApkReport r = new ReaEngine.ApkReport();
         r.findings.add(new ReaEngine.Finding("red", "2 URL(s)", "una", "DEX"));
