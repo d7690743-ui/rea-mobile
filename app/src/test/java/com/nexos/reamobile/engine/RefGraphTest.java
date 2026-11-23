@@ -175,6 +175,17 @@ public class RefGraphTest {
     }
 
     @Test
+    public void grafoResueltoPorSuperclase() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        List<DexCalls.Edge> in = new ArrayList<>();
+        in.add(mkEdge("Lcom/x/A;->cfg", "Lcom/x/W;->addJavascriptInterface", "classes.dex", 0));
+        r.graph.addAll(in);
+        r.superMap.put("Lcom/x/W;", "Landroid/webkit/WebView;");
+        ReaEngine.feedIntel(r);
+        assertEquals(1, r.intel.byCategory("grafo").size());
+    }
+
+    @Test
     public void endToEndExecEnInforme() throws Exception {
         File apk = new File(tmp.getRoot(), "exec.apk");
         ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(apk));

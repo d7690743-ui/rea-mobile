@@ -15,6 +15,7 @@ public final class ManifestChecks {
     }
 
     public static final int MAX_ITEMS = 30;
+    public static final int MAX_COMPONENTS = 300;
 
     private static final String[][] INTRUSIVE = {
             {"MANAGE_EXTERNAL_STORAGE", "acceso total al almacenamiento"},
@@ -40,8 +41,28 @@ public final class ManifestChecks {
         public List<String> bootReceivers = new ArrayList<>();
         public List<String> intrusivePerms = new ArrayList<>();
         public List<String> exported = new ArrayList<>();
+        public List<String> components = new ArrayList<>();
         public List<String> deepLinks = new ArrayList<>();
         public List<String> hygiene = new ArrayList<>();
+    }
+
+    /**
+     * Nombre de componente → descriptor (`Lcom/x/A;`); resuelve relativos
+     * (".A", "A") con el paquete. null si no hay nombre. Nunca lanza.
+     */
+    public static String resolveDescriptor(String raw, String pkg) {
+        try {
+            if (raw == null || raw.isEmpty() || "?".equals(raw)) return null;
+            String fq;
+            if (raw.startsWith(".")) fq = (pkg == null ? "" : pkg) + raw;
+            else if (raw.contains(".")) fq = raw;
+            else fq = (pkg == null || pkg.isEmpty() ? raw : pkg + "." + raw);
+            if (fq.startsWith(".")) fq = fq.substring(1);
+            if (fq.isEmpty()) return null;
+            return "L" + fq.replace('.', '/') + ";";
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     /** Analiza el XML decodificado + permisos. Nunca lanza. */
@@ -94,10 +115,14 @@ public final class ManifestChecks {
                     Pattern.CASE_INSENSITIVE);
             Matcher m = comp.matcher(xml);
             int guard = 0;
-            while (m.find() && guard++ < 2000 && r.exported.size() < MAX_ITEMS) {
+            while (m.find() && guard++ < 2000 && (r.exported.size() < MAX_ITEMS
+                    || r.components.size() < MAX_COMPONENTS)) {
                 String attrs = m.group(2);
-                if ("true".equals(attr(attrs, "android:exported"))) {
-                    String name = attr(attrs, "android:name");
+                String name = attr(attrs, "android:name");
+                if (!name.isEmpty() && r.components.size() < MAX_COMPONENTS
+                        && !r.components.contains(name)) r.components.add(name);
+                if ("true".equals(attr(attrs, "android:exported"))
+                        && r.exported.size() < MAX_ITEMS) {
                     r.exported.add(m.group(1) + ":" + (name.isEmpty() ? "?" : name));
                 }
             }
@@ -114,7 +139,8 @@ public final class ManifestChecks {
                 String scheme = attr(m.group(1), "android:scheme");
                 String host = attr(m.group(1), "android:host");
                 if (!scheme.isEmpty()) {
-                    r.deepLinks.add(host.isEmpty() ? scheme + "://" : scheme + "://" + host);
+                    String link = host.isEmpty() ? scheme + "://" : scheme + "://" + host;
+                    if (!r.deepLinks.contains(link)) r.deepLinks.add(link);
                 }
             }
         } catch (Throwable ignored) {

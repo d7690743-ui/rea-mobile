@@ -69,7 +69,7 @@ public class LogicNetTest {
         RefGraph g = grafo(
                 new String[]{"Lcom/x/A;->onCreate", "Lcom/x/A;->foo"},
                 new String[]{"Lcom/x/A;->foo", "Ljava/lang/Runtime;->exec"});
-        LogicNet.Chains ch = LogicNet.chainsTo(g, "exec", 8, 10);
+        LogicNet.Chains ch = LogicNet.chainsTo(g, "Ljava/lang/Runtime;->exec", 8, 10);
         assertEquals(1, ch.chains.size());
         assertEquals(Arrays.asList("Lcom/x/A;->onCreate", "Lcom/x/A;->foo",
                 "Ljava/lang/Runtime;->exec"), ch.chains.get(0));
@@ -77,10 +77,25 @@ public class LogicNetTest {
         // Llamador sin entrada: explorado entero, sin cadenas, sin recorte.
         RefGraph sin = grafo(
                 new String[]{"Lcom/x/A;->foo", "Ljava/lang/Runtime;->exec"});
-        LogicNet.Chains ch2 = LogicNet.chainsTo(sin, "exec", 8, 10);
+        LogicNet.Chains ch2 = LogicNet.chainsTo(sin, "Ljava/lang/Runtime;->exec", 8, 10);
         assertTrue(ch2.chains.isEmpty());
         assertTrue(!ch2.truncated);
-        assertTrue(LogicNet.chainsTo(g, "nadie", 8, 10).chains.isEmpty());
+        assertTrue(LogicNet.chainsTo(g, "Lcom/x/A;->nadie", 8, 10).chains.isEmpty());
+    }
+
+    @Test
+    public void objetivoPorClaveExacta() {
+        RefGraph g = grafo(
+                new String[]{"Lcom/x/A;->onCreate", "Lcom/x/A;->foo"},
+                new String[]{"Lcom/x/A;->foo", "Ljava/lang/Runtime;->exec"},
+                new String[]{"Lcom/x/B;->onCreate", "Lcom/x/B;->bar"},
+                new String[]{"Lcom/x/B;->bar", "Lcom/x/Lib;->exec"});
+        // Solo la clave exacta; el homónimo de otra clase no contamina.
+        LogicNet.Chains ch = LogicNet.chainsTo(g, "Ljava/lang/Runtime;->exec", 8, 10);
+        assertEquals(1, ch.chains.size());
+        assertEquals("Lcom/x/A;->onCreate", ch.chains.get(0).get(0));
+        // Nombre pelado ya no casa con nada (era el bug del <init>).
+        assertTrue(LogicNet.chainsTo(g, "exec", 8, 10).chains.isEmpty());
     }
 
     @Test
@@ -89,13 +104,13 @@ public class LogicNetTest {
                 new String[]{"Lcom/x/A;->onCreate", "Lcom/x/A;->m"},
                 new String[]{"Lcom/x/A;->onClick", "Lcom/x/A;->m"},
                 new String[]{"Lcom/x/A;->m", "Ljava/lang/Runtime;->exec"});
-        LogicNet.Chains ch = LogicNet.chainsTo(g, "exec", 8, 10);
+        LogicNet.Chains ch = LogicNet.chainsTo(g, "Ljava/lang/Runtime;->exec", 8, 10);
         assertEquals(2, ch.chains.size());
         assertEquals("Lcom/x/A;->onCreate", ch.chains.get(0).get(0));
         assertEquals("Lcom/x/A;->onClick", ch.chains.get(1).get(0));
         assertTrue(!ch.truncated);
         // Tope de cadenas: aborta con ramas pendientes y marca.
-        LogicNet.Chains c1 = LogicNet.chainsTo(g, "exec", 8, 1);
+        LogicNet.Chains c1 = LogicNet.chainsTo(g, "Ljava/lang/Runtime;->exec", 8, 1);
         assertEquals(1, c1.chains.size());
         assertTrue(c1.truncated);
         // Entrada más allá de la profundidad: sin cadena completa, con recorte.
@@ -103,7 +118,7 @@ public class LogicNetTest {
                 new String[]{"Lcom/x/A;->onCreate", "Lcom/x/A;->a"},
                 new String[]{"Lcom/x/A;->a", "Lcom/x/A;->b"},
                 new String[]{"Lcom/x/A;->b", "Ljava/lang/Runtime;->exec"});
-        LogicNet.Chains cd = LogicNet.chainsTo(deep, "exec", 2, 10);
+        LogicNet.Chains cd = LogicNet.chainsTo(deep, "Ljava/lang/Runtime;->exec", 2, 10);
         assertTrue(cd.chains.isEmpty());
         assertTrue(cd.truncated);
     }
@@ -146,6 +161,41 @@ public class LogicNetTest {
         // Vacío: sección explícita sin entradas.
         ReaEngine.ApkReport v = new ReaEngine.ApkReport();
         assertTrue(v.toText().contains("(sin entradas detectadas)"));
+    }
+
+    @Test
+    public void agrupaColas() {
+        List<List<String>> chains = new ArrayList<>();
+        chains.add(Arrays.asList("Lcom/x/A;->e1", "Lcom/x/A;->m", "Ljava/lang/Runtime;->exec"));
+        chains.add(Arrays.asList("Lcom/x/A;->e2", "Lcom/x/A;->m", "Ljava/lang/Runtime;->exec"));
+        chains.add(Arrays.asList("Lcom/x/A;->e3", "Lcom/x/A;->n", "Ljava/lang/Runtime;->exec"));
+        List<LogicNet.TrunkGroup> g = LogicNet.groupByTrunk(chains);
+        assertEquals(2, g.size());
+        assertEquals(3, g.get(0).first.size());
+        assertEquals(Arrays.asList("Lcom/x/A;->e1", "Lcom/x/A;->e2"), g.get(0).entries);
+        assertEquals(1, g.get(1).entries.size());
+        assertTrue(LogicNet.groupByTrunk(null).isEmpty());
+    }
+
+    @Test
+    public void colasAgrupadasEnInforme() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        r.graph = grafo(
+                new String[]{"Lcom/x/A;->onCreate", "Lcom/x/A;->m"},
+                new String[]{"Lcom/x/A;->onClick", "Lcom/x/A;->m"},
+                new String[]{"Lcom/x/A;->m", "Ljava/lang/Runtime;->exec"});
+        String txt = r.toText();
+        assertTrue(txt, txt.contains("-> Ljava/lang/Runtime;->exec x2"));
+        assertTrue(txt, txt.contains("desde=Lcom/x/A;->onClick"));
+    }
+
+    @Test
+    public void entradaVerificadaMarcada() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        r.graph = grafo(new String[]{"Lcom/x/A;->onCreate", "Lcom/x/A;->foo"});
+        r.manifestClasses.add("Lcom/x/A;");
+        String txt = r.toText();
+        assertTrue(txt, txt.contains("entrada=Lcom/x/A;->onCreate alcanza=1 [manifest]"));
     }
 
     @Test

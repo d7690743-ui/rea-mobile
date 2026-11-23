@@ -1,9 +1,11 @@
 package com.nexos.reamobile.engine;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Parser mínimo de DEX: cabecera, strings (MUTF-8), tipos, clases y métodos.
@@ -300,7 +302,36 @@ public final class DexParser {
         return null;
     }
 
-    private static boolean isShortName(String cls) {
+    /**
+     * Como suspiciousLabel pero subiendo por superclases (p.ej. un
+     * addJavascriptInterface invocado sobre una subclase de WebView).
+     * Best-effort con el mapa disponible, anti-ciclos, tope 8 saltos.
+     * Nunca lanza.
+     */
+    static String suspiciousLabelWithSupers(String cls, String name, Map<String, String> supers) {
+        try {
+            String hit = suspiciousLabel(cls, name);
+            if (hit != null || cls == null || supers == null) return hit;
+            String c = cls;
+            Set<String> seen = new HashSet<>();
+            seen.add(c);
+            for (int i = 0; i < 8; i++) {
+                String sup = supers.get(c);
+                if (sup == null || sup.isEmpty() || "?".equals(sup) || !seen.add(sup)) return null;
+                hit = suspiciousLabel(sup, name);
+                if (hit != null) return hit;
+                c = sup;
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /**
+     * Nombre propio de ofuscación: corto (ProGuard) o minúsculas de 3-5
+     * letras (R8: aftz, afwj…). Visible en el paquete para tests.
+     */
+    static boolean isShortName(String cls) {
         if (cls == null || cls.length() < 3) return false;
         if (cls.startsWith("Landroid/") || cls.startsWith("Ljava/")
                 || cls.startsWith("Ljavax/") || cls.startsWith("Lkotlin/")
@@ -310,7 +341,18 @@ public final class DexParser {
         if (simple.endsWith(";")) simple = simple.substring(0, simple.length() - 1);
         int dollar = simple.indexOf('$');
         if (dollar > 0) simple = simple.substring(0, dollar);
-        return simple.length() <= 2;
+        if (simple.length() <= 2) return true;
+        String core = slash < 0 && simple.startsWith("L") ? simple.substring(1) : simple;
+        return core.length() <= 5 && allLower(core);
+    }
+
+    private static boolean allLower(String s) {
+        if (s == null || s.isEmpty()) return false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < 'a' || c > 'z') return false;
+        }
+        return true;
     }
 
     private static String get(String[] arr, int idx) {

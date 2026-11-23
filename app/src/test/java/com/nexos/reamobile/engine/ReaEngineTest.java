@@ -8,8 +8,10 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -48,6 +50,75 @@ public class ReaEngineTest {
                 + " | 2 secreto(s) alta", ReaEngine.buildSummary(r));
         ReaEngine.ApkReport vacio = new ReaEngine.ApkReport();
         assertEquals("? | 0 permisos (0 de riesgo)", ReaEngine.buildSummary(vacio));
+    }
+
+    @Test
+    public void filtrosScanStrings() {
+        Set<String> urls = new LinkedHashSet<>();
+        Set<String> ips = new LinkedHashSet<>();
+        Set<String> emails = new LinkedHashSet<>();
+        Set<String> sec = new LinkedHashSet<>();
+        Set<String> high = new LinkedHashSet<>();
+        Map<String, String> origin = new LinkedHashMap<>();
+        int[] c = new int[5];
+        List<String> in = Arrays.asList(
+                "ver https://x.test/a ya",
+                "oid 1.3.6.1.4.1.311 en cert",
+                "solo 2.5.29.37 suelto",
+                "ip 10.0.2.2 local",
+                "img ytu_promo_dialog_logo@2x.png fin",
+                "mail a@b.com ok",
+                "Landroid/support/MediaSessionCompat$Token;",
+                "token secreto xyz");
+        ReaEngine.scanStrings(in, urls, ips, emails, sec, high, c, origin, "dex");
+        assertTrue(urls.contains("https://x.test/a"));
+        assertEquals("dex", origin.get("https://x.test/a"));
+        assertTrue(ips.contains("10.0.2.2"));
+        assertTrue(!ips.contains("1.3.6.1"));
+        assertTrue(!ips.contains("2.5.29.37"));
+        assertTrue(emails.contains("a@b.com"));
+        assertTrue(!emails.contains("ytu_promo_dialog_logo@2x.png"));
+        assertTrue(!sec.contains("Landroid/support/MediaSessionCompat$Token;"));
+        assertTrue(sec.contains("token secreto xyz"));
+    }
+
+    @Test
+    public void llamadasSinDuplicados() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        ReaEngine.addSuspCall(r, "Lcom/x/A;->a  ->  Ljava/lang/Runtime;->exec");
+        ReaEngine.addSuspCall(r, "Lcom/x/A;->a  ->  Ljava/lang/Runtime;->exec");
+        ReaEngine.addSuspCall(r, null);
+        ReaEngine.addSuspCall(null, "x");
+        assertEquals(1, r.suspCalls.size());
+    }
+
+    @Test
+    public void jsonLlevaRed() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        DexCalls.Edge e = new DexCalls.Edge();
+        e.caller = "Lcom/x/A;->onCreate";
+        e.callee = "Lcom/x/A;->foo";
+        r.graph.addAll(Arrays.asList(e));
+        String js = r.toJson();
+        assertTrue(js, js.contains("\"graphNodes\":2"));
+        assertTrue(js, js.contains("\"graphEdges\":1"));
+        assertTrue(js, js.contains("\"graphTruncated\":false"));
+        assertTrue(js, js.contains("\"stringValues\":0"));
+        assertTrue(js, js.contains("\"redEntries\":[\"Lcom/x/A;->onCreate\"]"));
+        assertTrue(js, js.contains("\"redChains\":[]"));
+        assertTrue(js, js.contains("\"redTruncated\":false"));
+    }
+
+    @Test
+    public void pasadaLibreria() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        ReaEngine.collectOwnCalls(r, DexCallsTest.buildOwnPlusLibDex(), "com/x/",
+                new LinkedHashSet<String>(), "classes.dex");
+        assertEquals(Arrays.asList("Ladrt/L;->bar"),
+                r.graph.callersOf("Ljava/lang/Runtime;->exec"));
+        assertEquals("Lcom/x/A;", r.superMap.get("Ladrt/L;"));
+        assertTrue(r.suspCalls.isEmpty());
+        assertTrue(r.dexNotes.isEmpty());
     }
 
     @Test

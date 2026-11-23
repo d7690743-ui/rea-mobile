@@ -104,6 +104,7 @@ public final class ReaEngine {
         public int emailTotal;
         public int secretTotal;
         public List<String> urls = new ArrayList<>();
+        public Map<String, String> urlOrigin = new LinkedHashMap<>();
         public List<String> ips = new ArrayList<>();
         public List<String> emails = new ArrayList<>();
         public List<String> secretHits = new ArrayList<>();
@@ -135,6 +136,8 @@ public final class ReaEngine {
         public IntelRegistry intel = new IntelRegistry();
         public RefGraph graph = new RefGraph();
         public StringRefs stringRefs = new StringRefs();
+        public Map<String, String> superMap = new LinkedHashMap<>();
+        public Set<String> manifestClasses = new LinkedHashSet<>();
         public List<String> limitations = new ArrayList<>();
         public List<String> unknowns = new ArrayList<>();
         public String error;
@@ -213,6 +216,8 @@ public final class ReaEngine {
                     sb.append(" <= ").append(us.get(0));
                     if (us.size() > 1) sb.append(", ").append(us.get(1));
                     if (us.size() > 2) sb.append(" (+").append(us.size() - 2).append(")");
+                } else if ("arsc".equals(urlOrigin.get(u))) {
+                    sb.append(" [arsc]");
                 }
                 sb.append('\n');
             }
@@ -277,47 +282,47 @@ public final class ReaEngine {
                 }
                 sb.append('\n');
             }
-            List<String> entries = LogicNet.entryPoints(graph);
-            List<LogicNet.Reach> reaches = new ArrayList<>();
-            boolean redCut = false;
-            for (int i = 0; i < entries.size() && i < 20; i++) {
-                LogicNet.Reach reach = LogicNet.reachableFrom(graph, entries.get(i), 6, 2000);
-                if (reach.truncated) redCut = true;
-                reaches.add(reach);
-            }
-            List<List<String>> allChains = new ArrayList<>();
-            for (String t : sensitiveTargets(graph, 5)) {
-                if (allChains.size() >= 10) {
-                    redCut = true;
-                    break;
-                }
-                LogicNet.Chains ch = LogicNet.chainsTo(graph, t, 8, 10 - allChains.size());
-                if (ch.truncated) redCut = true;
-                allChains.addAll(ch.chains);
-            }
-            sb.append("\n=== RED (entradas=").append(entries.size())
-                    .append(" cadenas=").append(allChains.size()).append(") ===");
-            if (redCut) sb.append(" [recortado]");
+            RedSummary red = summarizeRed(graph, superMap);
+            sb.append("\n=== RED (entradas=").append(red.entries.size())
+                    .append(" cadenas=").append(red.chains.size()).append(") ===");
+            if (red.truncated) sb.append(" [recortado]");
             sb.append('\n');
-            if (entries.isEmpty()) {
+            if (red.entries.isEmpty()) {
                 sb.append("  (sin entradas detectadas)\n");
             } else {
-                for (int i = 0; i < reaches.size(); i++) {
-                    sb.append("  entrada=").append(entries.get(i))
-                            .append(" alcanza=").append(reaches.get(i).nodes.size());
-                    if (reaches.get(i).truncated) sb.append(" [+]");
+                for (int i = 0; i < red.reaches.size(); i++) {
+                    sb.append("  entrada=").append(red.entries.get(i))
+                            .append(" alcanza=").append(red.reaches.get(i).nodes.size());
+                    if (red.reaches.get(i).truncated) sb.append(" [+]");
+                    if (manifestClasses.contains(RefGraph.split(red.entries.get(i))[0])) {
+                        sb.append(" [manifest]");
+                    }
                     sb.append('\n');
                 }
-                if (allChains.isEmpty()) sb.append("  (sin cadenas a API sensible)\n");
+                if (red.chains.isEmpty()) sb.append("  (sin cadenas a API sensible)\n");
             }
-            for (int i = 0; i < allChains.size() && i < 10; i++) {
+            List<LogicNet.TrunkGroup> groups = LogicNet.groupByTrunk(red.chains);
+            for (int i = 0; i < groups.size() && i < 10; i++) {
+                LogicNet.TrunkGroup gr = groups.get(i);
                 sb.append("  cadena=");
-                List<String> c = allChains.get(i);
-                for (int j = 0; j < c.size(); j++) {
+                for (int j = 0; j < gr.first.size(); j++) {
                     if (j > 0) sb.append(" -> ");
-                    sb.append(c.get(j));
+                    sb.append(gr.first.get(j));
                 }
+                if (gr.entries.size() > 1) sb.append(" x").append(gr.entries.size());
                 sb.append('\n');
+                if (gr.entries.size() > 1) {
+                    sb.append("    desde=");
+                    int ex = Math.min(5, gr.entries.size() - 1);
+                    for (int j = 1; j <= ex; j++) {
+                        if (j > 1) sb.append(", ");
+                        sb.append(gr.entries.get(j));
+                    }
+                    if (gr.entries.size() - 1 > ex) {
+                        sb.append(" (+").append(gr.entries.size() - 1 - ex).append(")");
+                    }
+                    sb.append('\n');
+                }
             }
             for (String hub : LogicNet.topCallees(graph, 3)) {
                 sb.append("  hub=").append(hub).append(" llamado-por=")
@@ -404,6 +409,25 @@ public final class ReaEngine {
             sb.append(']');
             jsonStrList(sb, "limitations", limitations);
             jsonStrList(sb, "unknowns", unknowns);
+            RedSummary red = summarizeRed(graph, superMap);
+            sb.append(",\"graphNodes\":").append(graph.nodeCount());
+            sb.append(",\"graphEdges\":").append(graph.edgeCount());
+            sb.append(",\"graphTruncated\":").append(graph.truncated());
+            sb.append(",\"stringValues\":").append(stringRefs.valueCount());
+            sb.append(",\"stringPairs\":").append(stringRefs.pairCount());
+            sb.append(",\"stringTruncated\":").append(stringRefs.truncated());
+            jsonStrList(sb, "redEntries", red.entries);
+            List<String> chainStrs = new ArrayList<>();
+            for (List<String> c : red.chains) {
+                StringBuilder j = new StringBuilder();
+                for (int i = 0; i < c.size(); i++) {
+                    if (i > 0) j.append(" -> ");
+                    j.append(c.get(i));
+                }
+                chainStrs.add(j.toString());
+            }
+            jsonStrList(sb, "redChains", chainStrs);
+            sb.append(",\"redTruncated\":").append(red.truncated);
             sb.append('}');
             return sb.toString();
         }
@@ -531,6 +555,12 @@ public final class ReaEngine {
                     r.manifestBoot.addAll(mc.bootReceivers);
                     r.manifestIntrusive.addAll(mc.intrusivePerms);
                     r.manifestExported.addAll(mc.exported);
+                    if (!"?".equals(r.packageName)) {
+                        for (String c : mc.components) {
+                            String d = ManifestChecks.resolveDescriptor(c, r.packageName);
+                            if (d != null) r.manifestClasses.add(d);
+                        }
+                    }
                     r.manifestLinks.addAll(mc.deepLinks);
                     r.manifestHygiene.addAll(mc.hygiene);
                 } else {
@@ -574,7 +604,8 @@ public final class ReaEngine {
                     if (di.hasAndroidx) frameworks.add("AndroidX/Jetpack");
                     if (di.hasGms) frameworks.add("Google/GMS");
                     if (di.hasUnity) frameworks.add("Unity");
-                    scanStrings(di.strings, urlSet, ipSet, emailSet, secretSet, secretHighSet, counters);
+                    scanStrings(di.strings, urlSet, ipSet, emailSet, secretSet, secretHighSet, counters,
+                            r.urlOrigin, "dex");
                     collectOwnCalls(r, dexBytes, "?".equals(r.packageName) ? null
                             : r.packageName.replace('.', '/') + "/", usedPermSet, dexName);
                     for (String s : di.suspicious) {
@@ -594,7 +625,8 @@ public final class ReaEngine {
                     } else {
                         r.arscStringCount = ai.stringCount;
                         r.arscTruncated = ai.truncated;
-                        scanStrings(ai.strings, urlSet, ipSet, emailSet, secretSet, secretHighSet, counters);
+                        scanStrings(ai.strings, urlSet, ipSet, emailSet, secretSet, secretHighSet, counters,
+                                r.urlOrigin, "arsc");
                     }
                 }
 
@@ -708,15 +740,18 @@ public final class ReaEngine {
         if (n.contains("libmonosgen") || n.contains("libmono")) out.add("Xamarin/.NET");
     }
 
-    private static void scanStrings(Collection<String> strings, Set<String> urls, Set<String> ips,
-                                     Set<String> emails, Set<String> secrets, Set<String> secretsHigh,
-                                     int[] counters) {
+    static void scanStrings(Collection<String> strings, Set<String> urls, Set<String> ips,
+                            Set<String> emails, Set<String> secrets, Set<String> secretsHigh,
+                            int[] counters, Map<String, String> urlSrc, String src) {
         for (String s : strings) {
             if (s == null || s.isEmpty()) continue;
             Matcher mu = URL_RE.matcher(s);
             while (mu.find()) {
                 counters[0]++;
-                if (urls.size() < MAX_SAMPLE) urls.add(mu.group());
+                String u = mu.group();
+                if (urls.size() < MAX_SAMPLE) urls.add(u);
+                if (urlSrc != null && src != null && !urlSrc.containsKey(u)
+                        && urlSrc.size() < MAX_SAMPLE) urlSrc.put(u, src);
             }
             Matcher mi = IP_RE.matcher(s);
             while (mi.find()) {
@@ -728,21 +763,27 @@ public final class ReaEngine {
                         ok = false;
                     }
                 }
-                if (ok && !"0.0.0.0".equals(mi.group()) && !"255.255.255.255".equals(mi.group())) {
+                String ip = mi.group();
+                if (ok && !"0.0.0.0".equals(ip) && !"255.255.255.255".equals(ip)
+                        && !isOid(ip) && !isOidPart(s, mi.start(), mi.end())) {
                     counters[1]++;
-                    if (ips.size() < MAX_SAMPLE) ips.add(mi.group());
+                    if (ips.size() < MAX_SAMPLE) ips.add(ip);
                 }
             }
             if (s.length() < 300) {
                 Matcher me = EMAIL_RE.matcher(s);
                 while (me.find()) {
+                    String em = me.group();
+                    if (em.contains("@1x.") || em.contains("@2x.") || em.contains("@3x.")) continue;
                     counters[2]++;
-                    if (emails.size() < MAX_SAMPLE) emails.add(me.group());
+                    if (emails.size() < MAX_SAMPLE) emails.add(em);
                 }
                 Matcher ms = SECRET_WORD_RE.matcher(s);
                 if (ms.find()) {
+                    String t = s.trim();
+                    if (t.startsWith("L") && t.endsWith(";") && t.contains("/")) continue;
                     counters[3]++;
-                    if (secrets.size() < MAX_SAMPLE) secrets.add(s.trim());
+                    if (secrets.size() < MAX_SAMPLE) secrets.add(t);
                 }
                 List<String> highIds = SecretRules.match(s);
                 if (!highIds.isEmpty()) {
@@ -754,6 +795,36 @@ public final class ReaEngine {
                 }
             }
         }
+    }
+
+    /**
+     * Arcos OID X.509 habituales (2.5.29.37 = subjectAltName…): en strings de
+     * APK casi siempre son OID, no IPv4 (una IP real 1.2/1.3/2.5.x.y se pierde;
+     * se asume por ser raro frente al ruido). Nunca lanza.
+     */
+    static boolean isOid(String ip) {
+        try {
+            if (ip == null) return false;
+            return ip.startsWith("1.2.") || ip.startsWith("1.3.") || ip.startsWith("2.5.");
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * true si el match numérico forma parte de una secuencia punteada más
+     * larga (OID 1.3.6.1.4…), no una IPv4 suelta. Nunca lanza.
+     */
+    static boolean isOidPart(String s, int start, int end) {
+        try {
+            if (s == null) return false;
+            if (end + 1 < s.length() && s.charAt(end) == '.'
+                    && s.charAt(end + 1) >= '0' && s.charAt(end + 1) <= '9') return true;
+            if (start - 2 >= 0 && s.charAt(start - 1) == '.'
+                    && s.charAt(start - 2) >= '0' && s.charAt(start - 2) <= '9') return true;
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
     private static String elfArch(byte[] head) {
@@ -813,24 +884,57 @@ public final class ReaEngine {
         }
     }
 
-    private static void collectOwnCalls(ApkReport r, byte[] dexBytes, String pkgSlash, Set<String> usedPermSet,
-                                        String dexName) {
+    static void collectOwnCalls(ApkReport r, byte[] dexBytes, String pkgSlash, Set<String> usedPermSet,
+                                String dexName) {
         try {
+            if (r == null || usedPermSet == null) return;
             DexCalls.Result cr = DexCalls.collect(dexBytes, pkgSlash, dexName);
+            r.superMap.putAll(cr.supers);
             r.graph.addAll(cr.edges);
             r.stringRefs.addAll(cr.strings);
             for (DexCalls.Edge e : cr.edges) {
+                if (e == null || e.callee == null) continue;
                 int arrow = e.callee.indexOf("->");
                 String cls = arrow < 0 ? e.callee : e.callee.substring(0, arrow);
                 String name = arrow < 0 ? "" : e.callee.substring(arrow + 2);
-                if (DexParser.suspiciousLabel(cls, name) != null && r.suspCalls.size() < MAX_SAMPLE) {
-                    r.suspCalls.add(e.caller + "  ->  " + e.callee);
+                if (DexParser.suspiciousLabelWithSupers(cls, name, r.superMap) != null) {
+                    addSuspCall(r, e.caller + "  ->  " + e.callee);
                 }
                 String perm = PermApiTable.permissionFor(e.callee);
                 if (perm != null && usedPermSet.size() < 60) usedPermSet.add(perm);
             }
             if (cr.truncated) r.dexNotes.add("llamadas: topes alcanzados (muestra parcial)");
-            if (cr.stringsTruncated) r.dexNotes.add("cadenas: topes alcanzados (muestra parcial)");
+            if (cr.stringsTruncated) noteOnce(r, "cadenas: topes alcanzados (muestra parcial)");
+            // Segunda pasada: sensibles invocadas desde librerías (adrt…) al grafo.
+            // suspCalls queda propio (su sección lo afirma); el grafo es más amplio.
+            if (pkgSlash != null) {
+                DexCalls.Result lib = DexCalls.collect(dexBytes, null, dexName);
+                r.superMap.putAll(lib.supers);
+                List<DexCalls.Edge> keep = new ArrayList<>();
+                for (DexCalls.Edge e : lib.edges) {
+                    if (e == null || e.caller == null || e.callee == null) continue;
+                    if (e.caller.startsWith("L" + pkgSlash)) continue;
+                    int arrow = e.callee.indexOf("->");
+                    String cls = arrow < 0 ? e.callee : e.callee.substring(0, arrow);
+                    String name = arrow < 0 ? "" : e.callee.substring(arrow + 2);
+                    if (DexParser.suspiciousLabelWithSupers(cls, name, r.superMap) == null) continue;
+                    keep.add(e);
+                }
+                r.graph.addAll(keep);
+                r.stringRefs.addAll(lib.strings);
+                String tag = dexName == null ? "?" : dexName;
+                if (lib.truncated) r.dexNotes.add("librerías " + tag + ": muestra parcial (topes)");
+                if (lib.stringsTruncated) noteOnce(r, "cadenas: topes alcanzados (muestra parcial)");
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Añade nota de dex una sola vez. Nunca lanza. */
+    private static void noteOnce(ApkReport r, String note) {
+        try {
+            if (r == null || note == null || r.dexNotes.contains(note)) return;
+            r.dexNotes.add(note);
         } catch (Throwable ignored) {
         }
     }
@@ -1458,10 +1562,55 @@ public final class ReaEngine {
     }
 
     /**
-     * Nombres simples de API sensible invocada (orden de aparición, cap).
+     * Añade llamada sensible sin duplicados (tope MAX_SAMPLE). Nunca lanza.
+     */
+    static void addSuspCall(ApkReport r, String line) {
+        try {
+            if (r == null || line == null || line.isEmpty()) return;
+            if (r.suspCalls.contains(line)) return;
+            if (r.suspCalls.size() < MAX_SAMPLE) r.suspCalls.add(line);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Resumen RED precomputado (lo usan toText y toJson). Nunca lanza. */
+    private static class RedSummary {
+        List<String> entries = new ArrayList<>();
+        List<LogicNet.Reach> reaches = new ArrayList<>();
+        List<List<String>> chains = new ArrayList<>();
+        boolean truncated;
+    }
+
+    private static RedSummary summarizeRed(RefGraph g, Map<String, String> supers) {
+        RedSummary s = new RedSummary();
+        try {
+            if (g == null) return s;
+            s.entries = LogicNet.entryPoints(g);
+            for (int i = 0; i < s.entries.size() && i < 20; i++) {
+                LogicNet.Reach reach = LogicNet.reachableFrom(g, s.entries.get(i), 6, 2000);
+                if (reach.truncated) s.truncated = true;
+                s.reaches.add(reach);
+            }
+            for (String t : sensitiveTargets(g, 5, supers)) {
+                if (s.chains.size() >= 10) {
+                    s.truncated = true;
+                    break;
+                }
+                LogicNet.Chains ch = LogicNet.chainsTo(g, t, 8, 10 - s.chains.size());
+                if (ch.truncated) s.truncated = true;
+                s.chains.addAll(ch.chains);
+            }
+        } catch (Throwable ignored) {
+        }
+        return s;
+    }
+
+    /**
+     * Claves completas de API sensible invocada (orden de aparición, cap).
+     * Clave completa (no nombre) para no mezclar homónimos (<init>, run…).
      * Nunca lanza.
      */
-    private static List<String> sensitiveTargets(RefGraph g, int cap) {
+    private static List<String> sensitiveTargets(RefGraph g, int cap, Map<String, String> supers) {
         List<String> out = new ArrayList<>();
         try {
             if (g == null || cap <= 0) return out;
@@ -1469,9 +1618,11 @@ public final class ReaEngine {
             for (RefGraph.RefEdge e : g.edges()) {
                 if (e == null) continue;
                 if (out.size() >= cap) break;
-                if (e.calleeMethod == null) continue;
-                if (DexParser.suspiciousLabel(e.calleeClass, e.calleeMethod) == null) continue;
-                if (seen.add(e.calleeMethod)) out.add(e.calleeMethod);
+                if (e.callee == null || e.calleeMethod == null) continue;
+                if (DexParser.suspiciousLabelWithSupers(e.calleeClass, e.calleeMethod, supers) == null) {
+                    continue;
+                }
+                if (seen.add(e.callee)) out.add(e.callee);
             }
         } catch (Throwable ignored) {
         }
@@ -1487,7 +1638,7 @@ public final class ReaEngine {
         try {
             if (r == null || r.graph == null || r.intel == null) return;
             int added = 0;
-            for (String t : sensitiveTargets(r.graph, 5)) {
+            for (String t : sensitiveTargets(r.graph, 5, r.superMap)) {
                 if (added >= 20) break;
                 LogicNet.Chains ch = LogicNet.chainsTo(r.graph, t, 8, 20 - added);
                 for (List<String> c : ch.chains) {
@@ -1527,7 +1678,9 @@ public final class ReaEngine {
             for (RefGraph.RefEdge e : r.graph.edges()) {
                 if (added >= 100) break;
                 if (e == null) continue;
-                if (DexParser.suspiciousLabel(e.calleeClass, e.calleeMethod) == null) continue;
+                if (DexParser.suspiciousLabelWithSupers(e.calleeClass, e.calleeMethod, r.superMap) == null) {
+                    continue;
+                }
                 String key = e.caller + "\u0000" + e.callee;
                 if (!seen.add(key)) continue;
                 IntelFinding inf = IntelFinding.create("grafo", e.caller + " llama a " + e.callee);

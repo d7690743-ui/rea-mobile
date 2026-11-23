@@ -1,7 +1,9 @@
 package com.nexos.reamobile.engine;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Grafo de llamadas lite: aristas clasePropia→métodoInvocado recorriendo los
@@ -35,6 +37,7 @@ public final class DexCalls {
     public static class Result {
         public List<Edge> edges = new ArrayList<>();
         public List<StringRef> strings = new ArrayList<>();
+        public Map<String, String> supers = new LinkedHashMap<>();
         public boolean truncated;
         public boolean stringsTruncated;
     }
@@ -99,6 +102,9 @@ public final class DexCalls {
                 int p = classOff + i * 32;
                 if (p + 32 > dex.length) break;
                 String cls = typeAt(types, u32(dex, p));
+                String sup = typeAt(types, u32(dex, p + 8));
+                if (!"?".equals(cls) && !"?".equals(sup) && !cls.equals(sup)
+                        && !"Ljava/lang/Object;".equals(sup)) r.supers.put(cls, sup);
                 int dataOff = u32(dex, p + 24);
                 if (pkgSlash != null && !cls.startsWith("L" + pkgSlash)) continue;
                 if (dataOff == 0) continue;

@@ -143,22 +143,22 @@ public final class LogicNet {
     }
 
     /**
-     * Cadenas entrada→…→objetivo (DFS inverso desde los métodos llamados
-     * `targetMethod`). Solo cadenas completas (raíz en entrada).
+     * Cadenas entrada→…→objetivo (DFS inverso desde el método `target`, clave
+     * completa `Lcom/x/A;->foo`). Solo cadenas completas (raíz en entrada).
      * maxDepth = aristas máximas por cadena (<=0: DEFAULT_DEPTH);
      * maxChains<=0 usa DEFAULT_MAX_CHAINS. Nunca lanza.
      */
-    public static Chains chainsTo(RefGraph g, String targetMethod, int maxDepth, int maxChains) {
+    public static Chains chainsTo(RefGraph g, String target, int maxDepth, int maxChains) {
         Chains r = new Chains();
         try {
-            if (g == null || targetMethod == null || targetMethod.isEmpty()) return r;
+            if (g == null || target == null || target.isEmpty()) return r;
             int depth = maxDepth <= 0 ? DEFAULT_DEPTH : maxDepth;
             int cap = maxChains <= 0 ? DEFAULT_MAX_CHAINS : maxChains;
             List<String> targets = new ArrayList<>();
             Set<String> seenT = new HashSet<>();
             for (RefGraph.RefEdge e : g.edges()) {
                 if (e == null || e.callee == null || !seenT.add(e.callee)) continue;
-                if (targetMethod.equals(simpleName(e.callee))) targets.add(e.callee);
+                if (target.equals(e.callee)) targets.add(e.callee);
             }
             Search st = new Search();
             st.cap = cap;
@@ -225,6 +225,45 @@ public final class LogicNet {
         } catch (Throwable ignored) {
             return true;
         }
+    }
+
+    /** Grupo de cadenas que comparten cola (todo menos la entrada). Nunca lanza. */
+    public static class TrunkGroup {
+        public List<String> first = new ArrayList<>();
+        public List<String> entries = new ArrayList<>();
+    }
+
+    /**
+     * Agrupa cadenas por cola común (orden de aparición). Nunca lanza.
+     */
+    public static List<TrunkGroup> groupByTrunk(List<List<String>> chains) {
+        List<TrunkGroup> out = new ArrayList<>();
+        try {
+            if (chains == null) return out;
+            Map<String, TrunkGroup> byKey = new LinkedHashMap<>();
+            for (List<String> c : chains) {
+                if (c == null || c.isEmpty()) continue;
+                String key;
+                if (c.size() > 1) {
+                    StringBuilder k = new StringBuilder();
+                    for (int i = 1; i < c.size(); i++) k.append(' ').append(c.get(i));
+                    key = k.toString();
+                } else {
+                    key = c.get(0);
+                }
+                TrunkGroup g = byKey.get(key);
+                if (g == null) {
+                    g = new TrunkGroup();
+                    g.first.addAll(c);
+                    byKey.put(key, g);
+                    out.add(g);
+                }
+                String e = c.get(0);
+                if (e != null && !g.entries.contains(e)) g.entries.add(e);
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
     }
 
     /**

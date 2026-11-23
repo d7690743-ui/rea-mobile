@@ -8,7 +8,8 @@ cadenas a métodos (#2). Roles por clase y data-flow, pendientes.
 - `engine/LogicNet`: consultas sobre `RefGraph` (utilidad estática, sin
   estado). No analiza DEX ni infiere llamadas: entradas por nombre
   (`ENTRY_METHODS`), `reachableFrom` (BFS con topes), `chainsTo` (DFS
-  inverso entrada→API sensible, solo cadenas completas), `topCallees`
+  inverso entrada→API sensible por clave completa, solo cadenas completas;
+  en B2 casaba por nombre y se corrigió en B3), `topCallees`
   (fan-in, espejo de `topCallers`).
 - `engine/StringRefs`: índice cadena→métodos, espejo de `RefGraph`.
   `usersOf` (exacto) + `usersOfContaining` (subcadena, para URLs dentro de
@@ -47,4 +48,4 @@ alcances y hubs. Cadenas a API sensible: previsiblemente
 `(sin cadenas a API sensible)`, porque el único candidato
 (`addJavascriptInterface`) se invoca sobre la subclase
 `BackgroundMediaWebView` y el patrón solo casa `WebView` exacto
-(limitación de herencia conocida, pendiente de resolución).
+(limitación de herencia conocida; resuelta en B3 por superclases).

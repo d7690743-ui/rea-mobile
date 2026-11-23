@@ -44,6 +44,32 @@ public class ManifestChecksTest {
     }
 
     @Test
+    public void componentesYResolucion() {
+        ManifestChecks.Result r = ManifestChecks.check(XML, null);
+        assertEquals(4, r.components.size());
+        assertTrue(r.components.contains("com.x.Main"));
+        assertTrue(r.components.contains("com.x.In"));
+        assertTrue(r.components.contains("com.x.Boot"));
+        assertTrue(r.components.contains("com.x.Deep"));
+        assertEquals("Lcom/x/Main;", ManifestChecks.resolveDescriptor(".Main", "com.x"));
+        assertEquals("Lcom/x/Main;", ManifestChecks.resolveDescriptor("com.x.Main", "com.y"));
+        assertEquals("Lcom/x/Main;", ManifestChecks.resolveDescriptor("Main", "com.x"));
+        assertTrue(ManifestChecks.resolveDescriptor(null, "com.x") == null);
+        assertTrue(ManifestChecks.resolveDescriptor("", "com.x") == null);
+    }
+
+    @Test
+    public void deeplinksSinDuplicados() {
+        String xml = "<manifest><application>"
+                + "<activity android:name=\"a\">"
+                + "<intent-filter><data android:scheme=\"https\" android:host=\"x.com\"/>"
+                + "<data android:scheme=\"https\" android:host=\"x.com\"/>"
+                + "</intent-filter></activity></application></manifest>";
+        ManifestChecks.Result r = ManifestChecks.check(xml, null);
+        assertEquals(1, r.deepLinks.size());
+    }
+
+    @Test
     public void vacioNoFalla() {
         ManifestChecks.Result r = ManifestChecks.check("", null);
         assertTrue(r.bootReceivers.isEmpty());

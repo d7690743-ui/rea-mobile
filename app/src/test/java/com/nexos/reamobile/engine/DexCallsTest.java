@@ -33,6 +33,25 @@ public class DexCallsTest {
     }
 
     @Test
+    public void supersClase() {
+        byte[] dex = buildOwnPlusLibDex();
+        DexCalls.Result r = DexCalls.collect(dex, null, "classes.dex");
+        assertEquals("Lcom/x/A;", r.supers.get("Ladrt/L;"));
+        assertTrue(!r.supers.containsKey("Lcom/x/A;"));
+        assertTrue(!r.truncated);
+    }
+
+    @Test
+    public void filtroPropioVsTodo() {
+        byte[] dex = buildOwnPlusLibDex();
+        assertTrue(DexCalls.collect(dex, "com/x/").edges.isEmpty());
+        DexCalls.Result todo = DexCalls.collect(dex, null);
+        assertEquals(1, todo.edges.size());
+        assertEquals("Ladrt/L;->bar", todo.edges.get(0).caller);
+        assertEquals("Ljava/lang/Runtime;->exec", todo.edges.get(0).callee);
+    }
+
+    @Test
     public void entradasMalasNoLanzan() {
         assertTrue(DexCalls.collect(null, "com/x/").edges.isEmpty());
         assertTrue(DexCalls.collect(new byte[10], "com/x/").edges.isEmpty());
@@ -160,6 +179,164 @@ public class DexCallsTest {
         d.mapItem(0x1000, 1, mapOff);
         d.mapItem(0x2000, 1, cd);
         d.mapItem(0x2001, 1, code0);
+        d.mapItem(0x2002, strs.length, firstStrData);
+        d.setU32(pDataSize, d.pos - dataOff);
+        d.setU32(pFileSize, d.pos);
+        return d.finish();
+    }
+
+    /**
+     * DEX con propia (Lcom/x/A;.foo solo retorna) + librería (Ladrt/L;.bar
+     * invoca a Runtime.exec). L hereda de A para probar supers.
+     */
+    static byte[] buildOwnPlusLibDex() {
+        String[] strs = {"Lcom/x/A;", "Ladrt/L;", "Ljava/lang/Object;", "foo", "bar", "A.java",
+                "V", "exec", "Ljava/lang/Runtime;"};
+        SmaliExtractTest.DexBuilder d = new SmaliExtractTest.DexBuilder();
+        d.bytes(new byte[]{'d', 'e', 'x', '\n', '0', '3', '5', 0});
+        d.u32(0);
+        for (int i = 0; i < 20; i++) d.u8(0);
+        int pFileSize = d.pos;
+        d.u32(0);
+        d.u32(0x70);
+        d.u32(0x12345678);
+        d.u32(0);
+        d.u32(0);
+        int pMapOff = d.pos;
+        d.u32(0);
+        d.u32(strs.length);
+        int pStrOff = d.pos;
+        d.u32(0);
+        d.u32(5);
+        int pTypeOff = d.pos;
+        d.u32(0);
+        d.u32(1);
+        int pProtoOff = d.pos;
+        d.u32(0);
+        d.u32(0);
+        d.u32(0);
+        d.u32(3);
+        int pMethOff = d.pos;
+        d.u32(0);
+        d.u32(2);
+        int pClsOff = d.pos;
+        d.u32(0);
+        int pDataSize = d.pos;
+        d.u32(0);
+        int pDataOff = d.pos;
+        d.u32(0);
+        int strIdsOff = d.pos;
+        d.setU32(pStrOff, strIdsOff);
+        int[] strIdPos = new int[strs.length];
+        for (int i = 0; i < strs.length; i++) {
+            strIdPos[i] = d.pos;
+            d.u32(0);
+        }
+        int typeIdsOff = d.pos;
+        d.setU32(pTypeOff, typeIdsOff);
+        d.u32(0);
+        d.u32(1);
+        d.u32(2);
+        d.u32(6);
+        d.u32(8);
+        int protoIdsOff = d.pos;
+        d.setU32(pProtoOff, protoIdsOff);
+        d.u32(6);
+        d.u32(3);
+        d.u32(0);
+        int methIdsOff = d.pos;
+        d.setU32(pMethOff, methIdsOff);
+        d.u16(0);
+        d.u16(0);
+        d.u32(3);
+        d.u16(1);
+        d.u16(0);
+        d.u32(4);
+        d.u16(4);
+        d.u16(0);
+        d.u32(7);
+        int clsDefsOff = d.pos;
+        d.setU32(pClsOff, clsDefsOff);
+        d.u32(0);
+        d.u32(1);
+        d.u32(2);
+        d.u32(0);
+        d.u32(5);
+        d.u32(0);
+        int pClassDataA = d.pos;
+        d.u32(0);
+        d.u32(0);
+        d.u32(1);
+        d.u32(1);
+        d.u32(0);
+        d.u32(0);
+        d.u32(5);
+        d.u32(0);
+        int pClassDataL = d.pos;
+        d.u32(0);
+        d.u32(0);
+        int dataOff = d.pos;
+        d.setU32(pDataOff, dataOff);
+        int firstStrData = d.pos;
+        for (int i = 0; i < strs.length; i++) {
+            d.setU32(strIdPos[i], d.pos);
+            byte[] sb = strs[i].getBytes(StandardCharsets.UTF_8);
+            d.uleb(sb.length);
+            d.bytes(sb);
+            d.u8(0);
+        }
+        d.align();
+        int codeFoo = d.pos;
+        d.u16(0);
+        d.u16(0);
+        d.u16(0);
+        d.u16(0);
+        d.u32(0);
+        d.u32(1);
+        d.u16(0x000e);
+        d.align();
+        int codeBar = d.pos;
+        d.u16(1);
+        d.u16(0);
+        d.u16(0);
+        d.u16(0);
+        d.u32(0);
+        d.u32(4);
+        d.u16(0x0071);
+        d.u16(0x0002);
+        d.u16(0x0000);
+        d.u16(0x000e);
+        int cdA = d.pos;
+        d.setU32(pClassDataA, cdA);
+        d.uleb(0);
+        d.uleb(0);
+        d.uleb(1);
+        d.uleb(0);
+        d.uleb(0);
+        d.uleb(0x9);
+        d.uleb(codeFoo);
+        int cdL = d.pos;
+        d.setU32(pClassDataL, cdL);
+        d.uleb(0);
+        d.uleb(0);
+        d.uleb(1);
+        d.uleb(0);
+        d.uleb(1);
+        d.uleb(0x9);
+        d.uleb(codeBar);
+        d.align();
+        int mapOff = d.pos;
+        d.setU32(pMapOff, mapOff);
+        d.u32(10);
+        d.mapItem(0x0000, 1, 0);
+        d.mapItem(0x0001, strs.length, strIdsOff);
+        d.mapItem(0x0002, 5, typeIdsOff);
+        d.mapItem(0x0003, 1, protoIdsOff);
+        d.mapItem(0x0005, 3, methIdsOff);
+        d.mapItem(0x0006, 2, clsDefsOff);
+        d.mapItem(0x1000, 1, mapOff);
+        d.mapItem(0x2000, 2, cdA);
+        d.mapItem(0x2001, 2, codeFoo);
         d.mapItem(0x2002, strs.length, firstStrData);
         d.setU32(pDataSize, d.pos - dataOff);
         d.setU32(pFileSize, d.pos);

@@ -112,9 +112,10 @@ public class StringRefsTest {
         r.urls.add("https://x.test/a");
         r.urls.add("https://suelta.test/");
         r.stringRefs.add(mkRef("Lcom/x/A;->foo", "https://x.test/a", "classes.dex", 0));
+        r.urlOrigin.put("https://suelta.test/", "arsc");
         String txt = r.toText();
         assertTrue(txt, txt.contains("url=https://x.test/a <= Lcom/x/A;->foo"));
-        assertTrue(txt, txt.contains("url=https://suelta.test/\n"));
+        assertTrue(txt, txt.contains("url=https://suelta.test/ [arsc]\n"));
     }
 
     @Test
