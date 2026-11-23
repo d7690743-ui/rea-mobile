@@ -52,6 +52,19 @@ public class ManifestChecksTest {
         assertTrue(r.components.contains("com.x.Boot"));
         assertTrue(r.components.contains("com.x.Deep"));
         assertEquals("Lcom/x/Main;", ManifestChecks.resolveDescriptor(".Main", "com.x"));
+    }
+
+    @Test
+    public void componentesIncluyeApp() {
+        String xml = "<manifest package=\"com.x\">"
+                + "<application android:name=\".App\" android:backupAgent=\"com.x.MiBackup\">"
+                + "<activity android:name=\"com.x.Main\"/>"
+                + "</application></manifest>";
+        ManifestChecks.Result r = ManifestChecks.check(xml, null);
+        assertTrue(r.components.contains("com.x.Main"));
+        assertTrue(r.components.toString(), r.components.contains(".App"));
+        assertTrue(r.components.toString(), r.components.contains("com.x.MiBackup"));
+        assertEquals("Lcom/x/App;", ManifestChecks.resolveDescriptor(".App", "com.x"));
         assertEquals("Lcom/x/Main;", ManifestChecks.resolveDescriptor("com.x.Main", "com.y"));
         assertEquals("Lcom/x/Main;", ManifestChecks.resolveDescriptor("Main", "com.x"));
         assertTrue(ManifestChecks.resolveDescriptor(null, "com.x") == null);

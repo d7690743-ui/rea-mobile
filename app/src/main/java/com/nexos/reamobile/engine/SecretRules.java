@@ -99,7 +99,7 @@ public final class SecretRules {
                 if (!ok) return false;
             }
             if (t.contains("://") || t.indexOf(':') >= 0 || t.indexOf('@') >= 0) return false;
-            if (t.startsWith("http") || t.startsWith("www.")) return false;
+            if (t.startsWith("http") || t.startsWith("www.") || t.startsWith("//")) return false;
             // Alfabetos base32/base64/hex de librerías: entropía alta pero no secretos.
             String up = t.toUpperCase(java.util.Locale.US);
             if (up.contains("ABCDEF") || up.contains("012345") || up.contains("234567")) return false;

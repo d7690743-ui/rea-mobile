@@ -50,6 +50,9 @@ public class SecretRulesTest {
         assertFalse(SecretRules.isTokenLike("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"));
         assertFalse(SecretRules.isTokenLike("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"));
         assertFalse(SecretRules.isTokenLike("0123456789ABCDEF0123456789ABCDEF"));
+        assertFalse(SecretRules.isTokenLike(
+                "//www.gstatic.com/youtube/media/ytm/images/ytu_promo_dialog_dreads_phone_1248x264.jpg"));
+        assertTrue(SecretRules.isTokenLike("7J3k9Q2mZ8vX4pL6/sN1bV0cR5tYw"));
         assertFalse(SecretRules.isTokenLike(null));
     }
 

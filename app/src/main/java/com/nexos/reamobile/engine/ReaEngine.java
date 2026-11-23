@@ -748,7 +748,7 @@ public final class ReaEngine {
             Matcher mu = URL_RE.matcher(s);
             while (mu.find()) {
                 counters[0]++;
-                String u = mu.group();
+                String u = trimUrl(mu.group());
                 if (urls.size() < MAX_SAMPLE) urls.add(u);
                 if (urlSrc != null && src != null && !urlSrc.containsKey(u)
                         && urlSrc.size() < MAX_SAMPLE) urlSrc.put(u, src);
@@ -795,6 +795,43 @@ public final class ReaEngine {
                 }
             }
         }
+    }
+
+    /**
+     * Recorta puntuación final pegada al citar URLs ("...a.", "...b).",
+     * "...e,"): siempre [.,;:!?] y cierres )]} desequilibrados (los
+     * balanceados tipo wiki_c_(d) se conservan). Si el recorte degenera,
+     * devuelve el original. Nunca lanza.
+     */
+    static String trimUrl(String u) {
+        try {
+            if (u == null || u.isEmpty()) return u;
+            String t = u;
+            for (int guard = 0; guard < 8; guard++) {
+                int n = t.length();
+                while (n > 0 && ".,;:!?".indexOf(t.charAt(n - 1)) >= 0) n--;
+                t = t.substring(0, n);
+                if (t.isEmpty()) break;
+                char last = t.charAt(t.length() - 1);
+                char open = last == ')' ? '(' : last == ']' ? '[' : last == '}' ? '{' : 0;
+                if (open == 0) break;
+                if (countChar(t, open) < countChar(t, last)) {
+                    t = t.substring(0, t.length() - 1);
+                    continue;
+                }
+                break;
+            }
+            if (t.endsWith("://")) return u;
+            return t;
+        } catch (Throwable ignored) {
+            return u;
+        }
+    }
+
+    private static int countChar(String s, char c) {
+        int n = 0;
+        for (int i = 0; i < s.length(); i++) if (s.charAt(i) == c) n++;
+        return n;
     }
 
     /**

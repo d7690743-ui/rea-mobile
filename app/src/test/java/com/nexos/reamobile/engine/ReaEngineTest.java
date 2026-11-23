@@ -83,6 +83,32 @@ public class ReaEngineTest {
     }
 
     @Test
+    public void urlsRecortanPuntuacion() {
+        Set<String> urls = new LinkedHashSet<>();
+        Set<String> ips = new LinkedHashSet<>();
+        Set<String> emails = new LinkedHashSet<>();
+        Set<String> sec = new LinkedHashSet<>();
+        Set<String> high = new LinkedHashSet<>();
+        Map<String, String> origin = new LinkedHashMap<>();
+        int[] c = new int[5];
+        List<String> in = Arrays.asList(
+                "ver https://x.test/a.",
+                "entre (https://y.test/b) parentesis",
+                "wiki https://w.test/c_(d) balanceado",
+                "dup https://f.test/e, y https://f.test/e.");
+        ReaEngine.scanStrings(in, urls, ips, emails, sec, high, c, origin, "dex");
+        assertTrue(urls.toString(), urls.contains("https://x.test/a"));
+        assertTrue(urls.toString(), urls.contains("https://y.test/b"));
+        assertTrue(urls.toString(), urls.contains("https://w.test/c_(d)"));
+        assertTrue(urls.toString(), urls.contains("https://f.test/e"));
+        assertTrue(!urls.contains("https://x.test/a."));
+        assertTrue(!urls.contains("https://y.test/b)"));
+        assertTrue(!urls.contains("https://f.test/e,"));
+        assertTrue(!urls.contains("https://f.test/e."));
+        assertEquals("dex", origin.get("https://x.test/a"));
+    }
+
+    @Test
     public void llamadasSinDuplicados() {
         ReaEngine.ApkReport r = new ReaEngine.ApkReport();
         ReaEngine.addSuspCall(r, "Lcom/x/A;->a  ->  Ljava/lang/Runtime;->exec");

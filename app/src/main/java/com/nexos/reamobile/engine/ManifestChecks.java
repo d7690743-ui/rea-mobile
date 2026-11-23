@@ -73,6 +73,7 @@ public final class ManifestChecks {
             if (xml.length() > 2000000) xml = xml.substring(0, 2000000);
             checkBoot(xml, r);
             checkExported(xml, r);
+            checkAppClasses(xml, r);
             checkLinks(xml, r);
             checkHygiene(xml, r);
             if (perms != null) {
@@ -119,8 +120,7 @@ public final class ManifestChecks {
                     || r.components.size() < MAX_COMPONENTS)) {
                 String attrs = m.group(2);
                 String name = attr(attrs, "android:name");
-                if (!name.isEmpty() && r.components.size() < MAX_COMPONENTS
-                        && !r.components.contains(name)) r.components.add(name);
+                addComponent(r, name);
                 if ("true".equals(attr(attrs, "android:exported"))
                         && r.exported.size() < MAX_ITEMS) {
                     r.exported.add(m.group(1) + ":" + (name.isEmpty() ? "?" : name));
@@ -128,6 +128,24 @@ public final class ManifestChecks {
             }
         } catch (Throwable ignored) {
         }
+    }
+
+    private static void checkAppClasses(String xml, Result r) {
+        try {
+            Pattern app = Pattern.compile("<application\\b([^>]*)>", Pattern.CASE_INSENSITIVE);
+            Matcher m = app.matcher(xml);
+            if (m.find()) {
+                String attrs = m.group(1);
+                addComponent(r, attr(attrs, "android:name"));
+                addComponent(r, attr(attrs, "android:backupAgent"));
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void addComponent(Result r, String name) {
+        if (name != null && !name.isEmpty() && r.components.size() < MAX_COMPONENTS
+                && !r.components.contains(name)) r.components.add(name);
     }
 
     private static void checkLinks(String xml, Result r) {
