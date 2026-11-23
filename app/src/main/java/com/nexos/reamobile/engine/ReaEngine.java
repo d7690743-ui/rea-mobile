@@ -328,6 +328,31 @@ public final class ReaEngine {
                 sb.append("  hub=").append(hub).append(" llamado-por=")
                         .append(graph.callersOf(hub).size()).append('\n');
             }
+            Map<String, List<ClassRoles.Role>> roles =
+                    ClassRoles.assign(graph, superMap, pkgSlashOf(packageName));
+            sb.append("\n=== ROLES (").append(roles.size()).append(") ===\n");
+            if (roles.isEmpty()) {
+                sb.append("  (sin roles detectados)\n");
+            } else {
+                for (Map.Entry<String, List<ClassRoles.Role>> en : roles.entrySet()) {
+                    sb.append("  rol=").append(en.getKey());
+                    if (en.getValue() != null) {
+                        for (ClassRoles.Role role : en.getValue()) {
+                            if (role == null) continue;
+                            sb.append(' ').append(role.label).append(" x").append(role.count);
+                            if (!role.evidence.isEmpty()) {
+                                sb.append(" [");
+                                for (int i = 0; i < role.evidence.size(); i++) {
+                                    if (i > 0) sb.append(", ");
+                                    sb.append(role.evidence.get(i));
+                                }
+                                sb.append(']');
+                            }
+                        }
+                    }
+                    sb.append('\n');
+                }
+            }
             return sb.toString();
         }
 
@@ -428,6 +453,26 @@ public final class ReaEngine {
             }
             jsonStrList(sb, "redChains", chainStrs);
             sb.append(",\"redTruncated\":").append(red.truncated);
+            sb.append(",\"roles\":{");
+            Map<String, List<ClassRoles.Role>> roles =
+                    ClassRoles.assign(graph, superMap, pkgSlashOf(packageName));
+            boolean firstRole = true;
+            for (Map.Entry<String, List<ClassRoles.Role>> en : roles.entrySet()) {
+                if (en.getKey() == null || en.getValue() == null) continue;
+                if (!firstRole) sb.append(',');
+                firstRole = false;
+                jsonQuoted(sb, en.getKey());
+                sb.append(":[");
+                boolean firstLbl = true;
+                for (ClassRoles.Role role : en.getValue()) {
+                    if (role == null) continue;
+                    if (!firstLbl) sb.append(',');
+                    firstLbl = false;
+                    jsonQuoted(sb, role.label);
+                }
+                sb.append(']');
+            }
+            sb.append('}');
             sb.append('}');
             return sb.toString();
         }
@@ -1595,7 +1640,18 @@ public final class ReaEngine {
             }
             feedIntelGraph(r);
             feedIntelRed(r);
+            feedIntelRoles(r);
         } catch (Throwable ignored) {
+        }
+    }
+
+    /** pkg "com.x" → "com/x/" para filtros de propias; null si "?". Nunca lanza. */
+    static String pkgSlashOf(String pkg) {
+        try {
+            if (pkg == null || pkg.isEmpty() || "?".equals(pkg)) return null;
+            return pkg.replace('.', '/') + "/";
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 
@@ -1729,6 +1785,36 @@ public final class ReaEngine {
                 inf.evidenceType = IntelFinding.EvidenceType.STATIC;
                 inf.limitations = "llamada estática respaldada por instrucción DEX; ejecución no observada";
                 if (r.intel.add(inf)) added++;
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * OMEGA roles: cada (clase, rol) pasa al registro con su primera
+     * evidencia. Confianza MEDIA y nunca se afirma ejecución. Tope 20.
+     * Nunca lanza.
+     */
+    static void feedIntelRoles(ApkReport r) {
+        try {
+            if (r == null || r.graph == null || r.intel == null) return;
+            int added = 0;
+            Map<String, List<ClassRoles.Role>> roles =
+                    ClassRoles.assign(r.graph, r.superMap, pkgSlashOf(r.packageName));
+            for (Map.Entry<String, List<ClassRoles.Role>> en : roles.entrySet()) {
+                if (added >= 20) break;
+                if (en.getKey() == null || en.getValue() == null) continue;
+                for (ClassRoles.Role role : en.getValue()) {
+                    if (added >= 20 || role == null) break;
+                    IntelFinding inf = IntelFinding.create("rol",
+                            en.getKey() + " actúa como " + role.label + " x" + role.count);
+                    inf.className = en.getKey();
+                    inf.evidence = role.evidence.isEmpty() ? "-" : role.evidence.get(0);
+                    inf.confidence = IntelFinding.Confidence.MEDIUM;
+                    inf.evidenceType = IntelFinding.EvidenceType.STATIC;
+                    inf.limitations = "llamada estática respaldada por instrucción DEX; ejecución no observada";
+                    if (r.intel.add(inf)) added++;
+                }
             }
         } catch (Throwable ignored) {
         }

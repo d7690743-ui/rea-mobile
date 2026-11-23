@@ -150,6 +150,28 @@ public class ReaEngineTest {
     }
 
     @Test
+    public void rolesInformeYRegistro() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        r.packageName = "com.x";
+        DexCalls.Edge e1 = new DexCalls.Edge();
+        e1.caller = "Lcom/x/Net;->a";
+        e1.callee = "Ljava/net/HttpURLConnection;->connect";
+        DexCalls.Edge e2 = new DexCalls.Edge();
+        e2.caller = "Lcom/x/Net;->b";
+        e2.callee = "Ljava/net/HttpURLConnection;->getInputStream";
+        r.graph.addAll(Arrays.asList(e1, e2));
+        String txt = r.toText();
+        assertTrue(txt, txt.contains("=== ROLES (1) ==="));
+        assertTrue(txt, txt.contains("rol=Lcom/x/Net; red x2"));
+        ReaEngine.feedIntel(r);
+        String txt2 = r.toText();
+        assertTrue(txt2, txt2.contains("[rol]"));
+        String js = r.toJson();
+        assertTrue(js, js.contains("\"roles\":{"));
+        assertTrue(js, js.contains("Lcom/x/Net;"));
+    }
+
+    @Test
     public void puenteIntel() {
         ReaEngine.ApkReport r = new ReaEngine.ApkReport();
         r.findings.add(new ReaEngine.Finding("red", "2 URL(s)", "una", "DEX"));
