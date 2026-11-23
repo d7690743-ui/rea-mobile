@@ -799,9 +799,10 @@ public final class ReaEngine {
 
     /**
      * Recorta puntuación final pegada al citar URLs ("...a.", "...b).",
-     * "...e,"): siempre [.,;:!?] y cierres )]} desequilibrados (los
-     * balanceados tipo wiki_c_(d) se conservan). Si el recorte degenera,
-     * devuelve el original. Nunca lanza.
+     * "...e,"): siempre [.,;:!] y cierres )]} desequilibrados (los
+     * balanceados tipo wiki_c_(d) se conservan). El "?" final se conserva:
+     * puede ser query vacía o parte de un patrón regex. Si el recorte
+     * degenera, devuelve el original. Nunca lanza.
      */
     static String trimUrl(String u) {
         try {
@@ -809,7 +810,7 @@ public final class ReaEngine {
             String t = u;
             for (int guard = 0; guard < 8; guard++) {
                 int n = t.length();
-                while (n > 0 && ".,;:!?".indexOf(t.charAt(n - 1)) >= 0) n--;
+                while (n > 0 && ".,;:!".indexOf(t.charAt(n - 1)) >= 0) n--;
                 t = t.substring(0, n);
                 if (t.isEmpty()) break;
                 char last = t.charAt(t.length() - 1);

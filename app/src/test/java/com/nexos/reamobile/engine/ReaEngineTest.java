@@ -95,12 +95,14 @@ public class ReaEngineTest {
                 "ver https://x.test/a.",
                 "entre (https://y.test/b) parentesis",
                 "wiki https://w.test/c_(d) balanceado",
-                "dup https://f.test/e, y https://f.test/e.");
+                "dup https://f.test/e, y https://f.test/e.",
+                "regex https://p.test/launch\\?id=([^/]+)? fin");
         ReaEngine.scanStrings(in, urls, ips, emails, sec, high, c, origin, "dex");
         assertTrue(urls.toString(), urls.contains("https://x.test/a"));
         assertTrue(urls.toString(), urls.contains("https://y.test/b"));
         assertTrue(urls.toString(), urls.contains("https://w.test/c_(d)"));
         assertTrue(urls.toString(), urls.contains("https://f.test/e"));
+        assertTrue(urls.toString(), urls.contains("https://p.test/launch\\?id=([^/]+)?"));
         assertTrue(!urls.contains("https://x.test/a."));
         assertTrue(!urls.contains("https://y.test/b)"));
         assertTrue(!urls.contains("https://f.test/e,"));
