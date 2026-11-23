@@ -35,7 +35,10 @@ desconocidos/nulos, duplicados, truncado, topCallers, dex real exec
 iv/ip/q5→foo), sección de informe + registro, end-to-end `analyze()` sobre
 mini-APK con exec.
 
-## Validación en teléfono (caso real)
+## Validación en teléfono (caso real, 2026-11-22)
 
-Abrir el APK de YouTube Blocker y buscar en el informe `exec<=`: debe listar
-el llamador real de `Runtime.exec` (antes solo salía como referencia suelta).
+Abierto YouTube Blocker con el APK faseb (`ccaa5cf0`):
+`exec<=(nadie detectado)`. Correcto: ningún método propio invoca `exec`
+(el Java decompilado lo corrobora); la referencia en `method_ids` viene de
+las 2 clases `adrt`, fuera del alcance de código propio.
+Referencia ≠ ejecución confirmada.

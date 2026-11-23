@@ -15,6 +15,7 @@ public final class DexCalls {
     public static final int MAX_METHODS_SCAN = 20000;
     public static final int MAX_UNITS = 6000;
     public static final int MAX_EDGES = 20000;
+    public static final int MAX_STRINGREFS = 20000;
 
     public static class Edge {
         public String caller = "?";
@@ -23,9 +24,19 @@ public final class DexCalls {
         public int pos = -1;
     }
 
+    /** Quién carga un literal (const-string) y dónde. Nunca lanza. */
+    public static class StringRef {
+        public String user = "?";
+        public String value = "?";
+        public String dex = "?";
+        public int pos = -1;
+    }
+
     public static class Result {
         public List<Edge> edges = new ArrayList<>();
+        public List<StringRef> strings = new ArrayList<>();
         public boolean truncated;
+        public boolean stringsTruncated;
     }
 
     /**
@@ -187,6 +198,27 @@ public final class DexCalls {
                     e.dex = dexName;
                     e.pos = p;
                     r.edges.add(e);
+                }
+            } else if (SmaliDumper.REFS[op] == SmaliDumper.R_STR) {
+                // const-string/jumbo: el índice es u16 (21c) o u32 (31c).
+                int idx = op == 0x1b
+                        ? u32(dex, codeOff + 16 + (p + 1) * 2)
+                        : u16(dex, codeOff + 16 + (p + 1) * 2);
+                if (idx >= 0 && idx < strings.length) {
+                    String v = get(strings, idx);
+                    if (v != null && !v.isEmpty() && !"?".equals(v)) {
+                        if (r.strings.size() < MAX_STRINGREFS) {
+                            StringRef s = new StringRef();
+                            s.user = caller;
+                            s.value = v;
+                            s.dex = dexName;
+                            s.pos = p;
+                            r.strings.add(s);
+                        } else {
+                            r.stringsTruncated = true;
+                            r.truncated = true;
+                        }
+                    }
                 }
             }
             p += size;
