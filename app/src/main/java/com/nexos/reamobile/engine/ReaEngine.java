@@ -136,6 +136,10 @@ public final class ReaEngine {
         public IntelRegistry intel = new IntelRegistry();
         public RefGraph graph = new RefGraph();
         public StringRefs stringRefs = new StringRefs();
+        public Map<String, IrBuilder.MethodIr> flowIrs = new LinkedHashMap<>();
+        public Map<String, String> flowDex = new LinkedHashMap<>();
+        public Map<String, String> flowStrings = new LinkedHashMap<>();
+        public boolean flowTruncated;
         public Map<String, String> superMap = new LinkedHashMap<>();
         public Set<String> manifestClasses = new LinkedHashSet<>();
         public List<String> limitations = new ArrayList<>();
@@ -353,6 +357,32 @@ public final class ReaEngine {
                     sb.append('\n');
                 }
             }
+            FlowSummary flow = summarizeFlow(this);
+            sb.append("\n=== FLUJO (metodos=").append(flow.methods)
+                    .append(" defs=").append(flow.defs)
+                    .append(" consts=").append(flow.consts.size())
+                    .append(" taint=").append(flow.flows.size()).append(") ===");
+            if (flow.truncated) sb.append(" [recortado]");
+            sb.append('\n');
+            if (flow.methods == 0) {
+                sb.append("  (sin flujo analizado)\n");
+            } else {
+                for (int i = 0; i < flow.consts.size() && i < 10; i++) {
+                    ResolvedConst k = flow.consts.get(i);
+                    sb.append("  const=").append(k.caller).append("@+").append(k.addr)
+                            .append(" v").append(k.reg).append('=').append(k.text).append('\n');
+                }
+                for (int i = 0; i < flow.flows.size() && i < 10; i++) {
+                    Taint.Flow f = flow.flows.get(i);
+                    sb.append("  taint=").append(f.source).append(" ~> ").append(f.sink)
+                            .append(" en ").append(f.method);
+                    if (f.inter) sb.append(" [inter]");
+                    sb.append('\n');
+                }
+                if (flow.consts.isEmpty() && flow.flows.isEmpty()) {
+                    sb.append("  (sin constantes ni flujos en llamadas)\n");
+                }
+            }
             SearchPlan.Plan plan = SearchPlan.build(this);
             sb.append("\n=== COBERTURA (perfil=").append(plan.profile.label).append(") ===\n");
             if (plan.note != null && !plan.note.isEmpty()) {
@@ -483,6 +513,21 @@ public final class ReaEngine {
                 sb.append(']');
             }
             sb.append('}');
+            FlowSummary flow = summarizeFlow(this);
+            sb.append(",\"flowMethods\":").append(flow.methods);
+            sb.append(",\"flowDefs\":").append(flow.defs);
+            sb.append(",\"flowTruncated\":").append(flow.truncated);
+            List<String> flowConstStrs = new ArrayList<>();
+            for (ResolvedConst k : flow.consts) {
+                flowConstStrs.add(k.caller + "@+" + k.addr + " v" + k.reg + "=" + k.text);
+            }
+            jsonStrList(sb, "flowConsts", flowConstStrs);
+            List<String> taintStrs = new ArrayList<>();
+            for (Taint.Flow f : flow.flows) {
+                taintStrs.add(f.source + " ~> " + f.sink + " @ " + f.method
+                        + (f.inter ? " [inter]" : ""));
+            }
+            jsonStrList(sb, "taintFlows", taintStrs);
             SearchPlan.Plan plan = SearchPlan.build(this);
             jsonField(sb, "profile", plan.profile.label, false);
             sb.append(",\"coverage\":{");
@@ -1011,6 +1056,7 @@ public final class ReaEngine {
             }
             if (cr.truncated) r.dexNotes.add("llamadas: topes alcanzados (muestra parcial)");
             if (cr.stringsTruncated) noteOnce(r, "cadenas: topes alcanzados (muestra parcial)");
+            collectFlow(r, dexBytes, pkgSlash, dexName);
             // Segunda pasada: sensibles invocadas desde librerías (adrt…) al grafo.
             // suspCalls queda propio (su sección lo afirma); el grafo es más amplio.
             if (pkgSlash != null) {
@@ -1031,6 +1077,35 @@ public final class ReaEngine {
                 String tag = dexName == null ? "?" : dexName;
                 if (lib.truncated) r.dexNotes.add("librerías " + tag + ": muestra parcial (topes)");
                 if (lib.stringsTruncated) noteOnce(r, "cadenas: topes alcanzados (muestra parcial)");
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * OMEGA flujo: recolecta IRs de métodos propios para def-use, constantes
+     * y taint (tope global FlowScan.MAX_FLOW_METHODS). Nunca lanza.
+     */
+    static void collectFlow(ApkReport r, byte[] dexBytes, String pkgSlash, String dexName) {
+        try {
+            if (r == null) return;
+            int budget = FlowScan.MAX_FLOW_METHODS - r.flowIrs.size();
+            if (budget <= 0) {
+                r.flowTruncated = true;
+                return;
+            }
+            FlowScan.FlowResult fr = FlowScan.collect(dexBytes, pkgSlash, dexName, budget);
+            for (Map.Entry<String, IrBuilder.MethodIr> en : fr.irs.entrySet()) {
+                if (en.getKey() == null || en.getValue() == null) continue;
+                if (r.flowIrs.containsKey(en.getKey())) continue;
+                r.flowIrs.put(en.getKey(), en.getValue());
+                String dx = fr.flowDex.get(en.getKey());
+                r.flowDex.put(en.getKey(), dx == null ? "?" : dx);
+            }
+            if (fr.strings != null) r.flowStrings.putAll(fr.strings);
+            if (fr.truncated) r.flowTruncated = true;
+            if (fr.skipped > 0) {
+                noteOnce(r, "flujo: " + fr.skipped + " método(s) grande(s) omitidos");
             }
         } catch (Throwable ignored) {
         }
@@ -1664,6 +1739,7 @@ public final class ReaEngine {
             feedIntelGraph(r);
             feedIntelRed(r);
             feedIntelRoles(r);
+            feedIntelFlow(r);
             feedIntelPlan(r);
         } catch (Throwable ignored) {
         }
@@ -1689,6 +1765,83 @@ public final class ReaEngine {
             if (r.suspCalls.size() < MAX_SAMPLE) r.suspCalls.add(line);
         } catch (Throwable ignored) {
         }
+    }
+
+    /** Constante resuelta en un sitio de llamada. Nunca lanza. */
+    static class ResolvedConst {
+        String caller = "?";
+        int addr = -1;
+        int reg = -1;
+        String text = "?";
+    }
+
+    /** Resumen FLUJO precomputado (lo usan toText, toJson y SearchPlan). Nunca lanza. */
+    static class FlowSummary {
+        int methods;
+        int defs;
+        int uses;
+        List<ResolvedConst> consts = new ArrayList<>();
+        List<Taint.Flow> flows = new ArrayList<>();
+        boolean truncated;
+    }
+
+    /**
+     * Analiza el flujo sobre las IRs recolectadas (def-use, constantes en
+     * llamadas, taint). Vacío si no hay IRs. Nunca null ni lanza.
+     */
+    static FlowSummary summarizeFlow(ApkReport r) {
+        FlowSummary s = new FlowSummary();
+        try {
+            if (r == null || r.flowIrs == null || r.flowIrs.isEmpty()) return s;
+            s.methods = r.flowIrs.size();
+            if (r.flowTruncated) s.truncated = true;
+            for (Map.Entry<String, IrBuilder.MethodIr> en : r.flowIrs.entrySet()) {
+                if (en.getKey() == null || en.getValue() == null) continue;
+                try {
+                    DefUse.Chains chains = DefUse.analyze(en.getValue());
+                    s.defs += chains.defs.size();
+                    s.uses += chains.uses.size();
+                    if (chains.truncated) s.truncated = true;
+                    ReachConsts.ConstResult cr = ReachConsts.analyze(en.getValue());
+                    if (cr.truncated) s.truncated = true;
+                    for (ReachConsts.CallConst cc : cr.callConsts) {
+                        if (cc == null || s.consts.size() >= 50) {
+                            if (cc != null) s.truncated = true;
+                            break;
+                        }
+                        ResolvedConst k = new ResolvedConst();
+                        k.caller = en.getKey();
+                        k.addr = cc.addr;
+                        k.reg = cc.reg;
+                        k.text = constText(r, en.getKey(), cc);
+                        s.consts.add(k);
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+            Taint.TaintResult tr = Taint.analyze(r.flowIrs, r.graph, r.superMap);
+            s.flows.addAll(tr.flows);
+            if (tr.truncated) s.truncated = true;
+        } catch (Throwable ignored) {
+        }
+        return s;
+    }
+
+    /** Texto legible de una constante (literal o string resuelto). Nunca lanza. */
+    private static String constText(ApkReport r, String caller, ReachConsts.CallConst cc) {
+        try {
+            if (cc.kind == ReachConsts.Kind.LIT) return "lit " + cc.lit;
+            if (cc.kind == ReachConsts.Kind.STR) {
+                String dex = r.flowDex == null ? null : r.flowDex.get(caller);
+                String v = (r.flowStrings == null || dex == null) ? null
+                        : r.flowStrings.get(dex + "\u0000" + cc.strRef);
+                if (v == null) return "str#" + cc.strRef;
+                if (v.length() > 80) v = v.substring(0, 80) + "…";
+                return "\"" + v + "\"";
+            }
+        } catch (Throwable ignored) {
+        }
+        return "?";
     }
 
     /** Resumen RED precomputado (lo usan toText y toJson). Nunca lanza. */
@@ -1845,6 +1998,61 @@ public final class ReaEngine {
     }
 
     /**
+     * OMEGA flujo: cada taint origen→sumidero pasa al registro, más las
+     * constantes resueltas en llamadas sensibles. Confianza MEDIA
+     * (instrucciones reales) y nunca se afirma ejecución. Topes 20+10.
+     * Nunca lanza.
+     */
+    static void feedIntelFlow(ApkReport r) {
+        try {
+            if (r == null || r.intel == null) return;
+            FlowSummary flow = summarizeFlow(r);
+            int added = 0;
+            for (Taint.Flow f : flow.flows) {
+                if (added >= 20 || f == null) break;
+                String[] parts = RefGraph.split(f.method);
+                IntelFinding inf = IntelFinding.create("taint",
+                        f.source + " ~> " + f.sink);
+                inf.className = parts[0];
+                inf.methodName = parts[1];
+                inf.evidence = f.evidence == null || f.evidence.isEmpty() ? "-" : f.evidence;
+                inf.confidence = IntelFinding.Confidence.MEDIUM;
+                inf.evidenceType = IntelFinding.EvidenceType.STATIC;
+                inf.limitations = "flujo estático best-effort (intra exacto, inter un salto);"
+                        + " ejecución no observada";
+                if (r.intel.add(inf)) added++;
+            }
+            int addedC = 0;
+            for (ResolvedConst k : flow.consts) {
+                if (addedC >= 10 || k == null) break;
+                boolean sensitive = false;
+                String callee = "?";
+                for (String c : InterProc.calleesAt(r.graph, k.caller, k.addr)) {
+                    String[] parts = RefGraph.split(c);
+                    if (DexParser.suspiciousLabelWithSupers(parts[0], parts[1], r.superMap)
+                            != null) {
+                        sensitive = true;
+                        callee = c;
+                        break;
+                    }
+                }
+                if (!sensitive) continue;
+                String[] parts = RefGraph.split(k.caller);
+                IntelFinding inf = IntelFinding.create("flujo",
+                        k.caller + " arg v" + k.reg + " = " + k.text);
+                inf.className = parts[0];
+                inf.methodName = parts[1];
+                inf.evidence = "invoke @+" + k.addr + " -> " + callee;
+                inf.confidence = IntelFinding.Confidence.MEDIUM;
+                inf.evidenceType = IntelFinding.EvidenceType.STATIC;
+                inf.limitations = "constante estática en sitio de llamada; ejecución no observada";
+                if (r.intel.add(inf)) addedC++;
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
      * OMEGA plan RAG: un hallazgo con el perfil y el recuento de estados.
      * Nunca lanza.
      */
@@ -1892,7 +2100,7 @@ public final class ReaEngine {
     private static void finishStatic(ApkReport r) {
         feedIntel(r);
         r.limitations.add("Java bajo demanda en el visor (JADX on-device con topes); el informe base no incluye fuentes.");
-        r.limitations.add("Xrefs parciales: llamadas de código propio (DexCalls) sin flujo inter-procedural completo.");
+        r.limitations.add("Flujo de datos parcial: def-use/taint best-effort con topes (inter de un salto, sin heap ni reflexión).");
         r.limitations.add("Sin análisis dinámico (Frida/adb): estático únicamente.");
         r.limitations.add("AXML y ARSC decodificados con parser propio (best-effort).");
         r.limitations.add("Nativas: solo inventario y arquitectura ELF, sin desensamblado.");

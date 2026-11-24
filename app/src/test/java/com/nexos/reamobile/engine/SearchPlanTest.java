@@ -75,7 +75,7 @@ public class SearchPlanTest {
         SearchPlan.Plan plan = SearchPlan.build(new ReaEngine.ApkReport());
         assertEquals(SearchPlan.Profile.SENCILLO, plan.profile);
         assertEquals(20, plan.checks.size());
-        assertEquals(SearchPlan.State.UNSUPPORTED, estado(plan, "taint"));
+        assertEquals(SearchPlan.State.NOT_EXECUTED, estado(plan, "taint"));
         assertEquals(SearchPlan.State.UNSUPPORTED, estado(plan, "dinamico"));
         assertEquals(SearchPlan.State.NOT_EXECUTED, estado(plan, "fuentes"));
         assertEquals(SearchPlan.State.NOT_FOUND_IN_SCOPE, estado(plan, "red"));
@@ -120,6 +120,15 @@ public class SearchPlanTest {
         SearchPlan.Plan plan = SearchPlan.build(r);
         assertEquals(SearchPlan.Profile.OFUSCADO, plan.profile);
         assertEquals(SearchPlan.State.FOUND, estado(plan, "ofuscacion"));
+    }
+
+    @Test
+    public void taintEvaluaFlujo() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        r.flowIrs.put("Lcom/x/A;->f", new IrBuilder.MethodIr());
+        SearchPlan.Plan plan = SearchPlan.build(r);
+        assertEquals(SearchPlan.State.PARTIAL, estado(plan, "taint"));
+        assertEquals("1 métodos, sin flujos", detalle(plan, "taint"));
     }
 
     @Test

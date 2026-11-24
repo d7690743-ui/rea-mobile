@@ -181,7 +181,7 @@ public class ReaEngineTest {
         r.obfuscatedRatio = 0.41;
         String txt = r.toText();
         assertTrue(txt, txt.contains("=== COBERTURA (perfil=framework) ==="));
-        assertTrue(txt, txt.contains("check=taint UNSUPPORTED"));
+        assertTrue(txt, txt.contains("check=taint NOT_EXECUTED"));
         assertTrue(txt, txt.contains("check=nativas PARTIAL"));
         ReaEngine.feedIntel(r);
         String txt2 = r.toText();
@@ -189,6 +189,31 @@ public class ReaEngineTest {
         String js = r.toJson();
         assertTrue(js, js.contains("\"profile\":\"framework\""));
         assertTrue(js, js.contains("\"coverage\":{"));
+    }
+
+    @Test
+    public void flujoInformeYRegistro() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        r.flowIrs.put("Lcom/x/A;->foo", DefUseTest.fooIr());
+        DexCalls.Edge e1 = new DexCalls.Edge();
+        e1.caller = "Lcom/x/A;->foo";
+        e1.callee = "Landroid/widget/EditText;->getText";
+        e1.pos = 0;
+        DexCalls.Edge e2 = new DexCalls.Edge();
+        e2.caller = "Lcom/x/A;->foo";
+        e2.callee = "Landroid/util/Log;->d";
+        e2.pos = 5;
+        r.graph.addAll(Arrays.asList(e1, e2));
+        String txt = r.toText();
+        assertTrue(txt, txt.contains("=== FLUJO (metodos=1"));
+        assertTrue(txt, txt.contains("taint=Landroid/widget/EditText;->getText@+0"
+                + " ~> Landroid/util/Log;->d@+5 en Lcom/x/A;->foo"));
+        assertTrue(txt, txt.contains("check=taint FOUND"));
+        ReaEngine.feedIntel(r);
+        assertEquals(1, r.intel.byCategory("taint").size());
+        String js = r.toJson();
+        assertTrue(js, js.contains("\"flowMethods\":1"));
+        assertTrue(js, js.contains("\"taintFlows\":["));
     }
 
     @Test

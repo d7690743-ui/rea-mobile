@@ -38,6 +38,8 @@ salvo indicación. Nada aquí se declara sin su prueba o medición.
 ## Pendiente (no prometido)
 
 - F3.3 SSA-lite, F3.4 estructuración, F3.5 emisor. (F3.2 tipos: hecho.)
+- Fase E aporta SSA de flujo (`Ssa`: versiones+phis para taint); F3.3
+  SSA-lite del descompilador sigue pendiente (es otra pieza).
 - Validación en dispositivo del descompilado Java v0.3.2 (usuario).
 
 Nota v0.3.2: APK intenta carga completa (125 java, 0 err) y si aborta

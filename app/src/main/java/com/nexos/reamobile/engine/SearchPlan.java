@@ -323,7 +323,16 @@ public final class SearchPlan {
             }
             return state(id, State.NOT_FOUND_IN_SCOPE, "grafo vacío");
         }
-        if ("taint".equals(id)) return state(id, State.UNSUPPORTED, "técnica no implementada");
+        if ("taint".equals(id)) {
+            ReaEngine.FlowSummary flow = ReaEngine.summarizeFlow(r);
+            if (flow != null && !flow.flows.isEmpty()) {
+                return state(id, State.FOUND, flow.flows.size() + " flujo(s)");
+            }
+            if (flow != null && flow.methods > 0) {
+                return state(id, State.PARTIAL, flow.methods + " métodos, sin flujos");
+            }
+            return state(id, State.NOT_EXECUTED, "sin IR de flujo");
+        }
         if ("superficie".equals(id)) {
             if (!empty(r.manifestExported) || !empty(r.manifestLinks)) {
                 return state(id, State.FOUND, r.manifestExported.size() + " exp");
