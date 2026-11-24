@@ -217,6 +217,93 @@ public class ReaEngineTest {
     }
 
     @Test
+    public void nativoInformeYRegistro() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        AlfaElf.ElfInfo e = new AlfaElf.ElfInfo();
+        e.name = "lib/arm64-v8a/libx.so";
+        e.arch = "ARM64";
+        e.elfType = "DYN";
+        e.exportCount = 2;
+        e.jniExports.add("Java_com_x_A_foo");
+        e.hasJniOnLoad = true;
+        r.alfaElfs.add(e);
+        r.nativeLibs.add("lib/arm64-v8a/libx.so (ARM64)");
+        DexCalls.Edge g = new DexCalls.Edge();
+        g.caller = "Lcom/x/B;->run";
+        g.callee = "Lcom/x/A;->foo";
+        g.pos = 0;
+        r.graph.add(g);
+        String txt = r.toText();
+        assertTrue(txt, txt.contains("=== NATIVO (libs=1"));
+        assertTrue(txt, txt.contains("jni=Java_com_x_A_foo -> Lcom/x/A;->foo <="));
+        assertTrue(txt, txt.contains("check=nativas PARTIAL"));
+        ReaEngine.feedIntel(r);
+        assertEquals(1, r.intel.byCategory("nativo").size());
+        assertEquals(1, r.intel.byCategory("jni").size());
+        String js = r.toJson();
+        assertTrue(js, js.contains("\"elfParsed\":1"));
+        assertTrue(js, js.contains("\"jniLinks\":["));
+    }
+
+    @Test
+    public void uiInformeYRegistro() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        AlfaUi.Screen s = new AlfaUi.Screen();
+        s.layout = "res/layout/a.xml";
+        s.views = 2;
+        s.handlers.add("enviar");
+        r.alfaScreens.add(s);
+        DexCalls.Edge g = new DexCalls.Edge();
+        g.caller = "Lcom/x/Main;->enviar";
+        g.callee = "Ljava/lang/System;->loadLibrary";
+        g.pos = 0;
+        r.graph.add(g);
+        DexCalls.Edge h = new DexCalls.Edge();
+        h.caller = "Lcom/x/Main;->onCreate";
+        h.callee = "Ljava/lang/System;->loadLibrary";
+        h.pos = 0;
+        r.graph.add(h);
+        r.manifestClasses.add("Lcom/x/Main;");
+        r.manifestExported.add("activity:com.x.Main");
+        r.packageName = "com.x";
+        String txt = r.toText();
+        assertTrue(txt, txt.contains("=== UI (pantallas=1"));
+        assertTrue(txt, txt.contains("handler=res/layout/a.xml enviar <="));
+        assertTrue(txt, txt.contains("entrada=Lcom/x/Main;->onCreate [exportada]"));
+        ReaEngine.feedIntel(r);
+        assertEquals(2, r.intel.byCategory("entrada").size());
+        assertEquals(1, r.intel.byCategory("ui").size());
+        String js = r.toJson();
+        assertTrue(js, js.contains("\"uiScreens\":1"));
+        assertTrue(js, js.contains("\"uiEntries\":["));
+    }
+
+    @Test
+    public void blueprintInformeYRegistro() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        String url = "https://api.x.com/subir";
+        r.urls.add(url);
+        r.urlOrigin.put(url, "DEX");
+        r.manifestPerms.add("android.permission.ACCESS_FINE_LOCATION");
+        DexCalls.StringRef s = new DexCalls.StringRef();
+        s.value = url;
+        s.user = "Lcom/x/App;->enviar";
+        r.stringRefs.add(s);
+        DexCalls.Edge g = new DexCalls.Edge();
+        g.caller = "Lcom/x/App;->enviar";
+        g.callee = "Landroid/location/LocationManager;->getLastKnownLocation";
+        g.pos = 0;
+        r.graph.add(g);
+        String txt = r.toText();
+        assertTrue(txt, txt.contains("=== BLUEPRINT (cadenas=1 riesgo=1) ==="));
+        assertTrue(txt, txt.contains("permiso=ACCESS_FINE_LOCATION[declarado][riesgo]"));
+        ReaEngine.feedIntel(r);
+        assertEquals(1, r.intel.byCategory("correlacion").size());
+        String js = r.toJson();
+        assertTrue(js, js.contains("\"corrChains\":["));
+    }
+
+    @Test
     public void puenteIntel() {
         ReaEngine.ApkReport r = new ReaEngine.ApkReport();
         r.findings.add(new ReaEngine.Finding("red", "2 URL(s)", "una", "DEX"));

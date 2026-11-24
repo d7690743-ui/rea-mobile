@@ -25,6 +25,49 @@ git add settings.gradle build.gradle gradle.properties .gitignore \
   app/src/test/java/com/nexos/reamobile/engine/IrBuilderTest.java \
   app/src/main/java/com/nexos/reamobile/engine/JavaHarvest.java \
   app/src/test/java/com/nexos/reamobile/engine/JavaHarvestTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/FullReport.java \
+  app/src/test/java/com/nexos/reamobile/engine/FullReportTest.java \
+  app/src/main/java/com/nexos/reamobile/intelligence/IntelFinding.java \
+  app/src/main/java/com/nexos/reamobile/intelligence/IntelRegistry.java \
+  app/src/test/java/com/nexos/reamobile/intelligence/IntelTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/RefGraph.java \
+  app/src/test/java/com/nexos/reamobile/engine/RefGraphTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/LogicNet.java \
+  app/src/test/java/com/nexos/reamobile/engine/LogicNetTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/StringRefs.java \
+  app/src/test/java/com/nexos/reamobile/engine/StringRefsTest.java \
+  docs/OMEGA_FASE_A.md \
+  docs/OMEGA_FASE_B.md \
+  docs/OMEGA_FASE_B2.md \
+  docs/OMEGA_FASE_B3.md \
+  docs/OMEGA_FASE_B4.md \
+  docs/OMEGA_FASE_B5.md \
+  docs/OMEGA_FASE_C.md \
+  app/src/main/java/com/nexos/reamobile/engine/ClassRoles.java \
+  app/src/test/java/com/nexos/reamobile/engine/ClassRolesTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/IrTypes.java \
+  app/src/test/java/com/nexos/reamobile/engine/IrTypesTest.java \
+  docs/OMEGA_FASE_D.md \
+  app/src/main/java/com/nexos/reamobile/engine/SearchPlan.java \
+  app/src/test/java/com/nexos/reamobile/engine/SearchPlanTest.java \
+  docs/OMEGA_FASE_E.md \
+  app/src/main/java/com/nexos/reamobile/engine/DefUse.java \
+  app/src/test/java/com/nexos/reamobile/engine/DefUseTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/ReachConsts.java \
+  app/src/test/java/com/nexos/reamobile/engine/ReachConstsTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/Ssa.java \
+  app/src/test/java/com/nexos/reamobile/engine/SsaTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/InterProc.java \
+  app/src/test/java/com/nexos/reamobile/engine/InterProcTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/Taint.java \
+  app/src/test/java/com/nexos/reamobile/engine/TaintTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/FlowScan.java \
+  app/src/test/java/com/nexos/reamobile/engine/FlowScanTest.java \
+  docs/MEMORIA.md \
+  app/src/main/java/com/nexos/reamobile/engine/DexStrings.java \
+  app/src/main/java/com/nexos/reamobile/engine/DexTypes.java \
+  app/src/test/java/com/nexos/reamobile/engine/DexStringsTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/DexParserTest.java \
   app/src/test/java/com/nexos/reamobile/engine/ReaEngineTest.java \
   app/src/main/java/com/nexos/reamobile/engine/SecretRules.java \
   app/src/main/java/com/nexos/reamobile/engine/DexCalls.java \
@@ -41,6 +84,18 @@ git add settings.gradle build.gradle gradle.properties .gitignore \
   app/src/test/java/com/nexos/reamobile/engine/TablesTest.java \
   app/src/test/java/com/nexos/reamobile/engine/LibAppScanTest.java \
   app/src/test/java/com/nexos/reamobile/engine/ManifestChecksTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/AlfaElf.java \
+  app/src/test/java/com/nexos/reamobile/engine/AlfaElfTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/AlfaJni.java \
+  app/src/test/java/com/nexos/reamobile/engine/AlfaJniTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/AlfaUi.java \
+  app/src/test/java/com/nexos/reamobile/engine/AlfaUiTest.java \
+  app/src/main/java/com/nexos/reamobile/engine/AlfaCorr.java \
+  app/src/test/java/com/nexos/reamobile/engine/AlfaCorrTest.java \
+  docs/ALFA_1_NATIVO.md \
+  docs/ALFA_2_UI.md \
+  docs/ALFA_3_BLUEPRINT.md \
+  autopush.sh \
   app/src/main/java/com/nexos/reamobile/Session.kt \
   app/src/main/java/com/nexos/reamobile/CodeViewerActivity.kt \
   docs/FASE3_MOTOR_PROPIO.md \

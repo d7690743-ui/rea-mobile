@@ -41,6 +41,12 @@ public final class ReaEngine {
 
     public static final String VERSION = "0.4";
     private static final long MAX_DEX_BYTES = 160L * 1024 * 1024;
+    private static final int MAX_ELF_LIBS = 30;
+    private static final int ELF_HEAD_CAP = 4 * 1024 * 1024;
+    private static final int ELF_TAIL_CAP = 2 * 1024 * 1024;
+    private static final long MAX_SO_SCAN = 150L * 1024 * 1024;
+    private static final int MAX_LAYOUTS = 200;
+    private static final int MAX_LAYOUT_BYTES = 1024 * 1024;
     private static final int MAX_SAMPLE = 50;
     private static final int MANIFEST_TEXT_CAP = 6000;
 
@@ -140,6 +146,10 @@ public final class ReaEngine {
         public Map<String, String> flowDex = new LinkedHashMap<>();
         public Map<String, String> flowStrings = new LinkedHashMap<>();
         public boolean flowTruncated;
+        public List<AlfaElf.ElfInfo> alfaElfs = new ArrayList<>();
+        public List<AlfaUi.Screen> alfaScreens = new ArrayList<>();
+        /** ALFA-3: primer "permiso|api" por llamador propio (tope 4000). */
+        public Map<String, String> callerPerm = new LinkedHashMap<>();
         public Map<String, String> superMap = new LinkedHashMap<>();
         public Set<String> manifestClasses = new LinkedHashSet<>();
         public List<String> limitations = new ArrayList<>();
@@ -393,6 +403,109 @@ public final class ReaEngine {
                 sb.append("  check=").append(c.id).append(' ').append(c.state)
                         .append(' ').append(c.detail).append('\n');
             }
+            List<AlfaJni.JniLink> jni = summarizeAlfaJni(this);
+            sb.append("\n=== NATIVO (libs=").append(alfaElfs.size())
+                    .append(" jni=").append(jni.size()).append(") ===\n");
+            if (alfaElfs.isEmpty()) {
+                sb.append("  (sin ELF parseados)\n");
+            } else {
+                for (AlfaElf.ElfInfo e : alfaElfs) {
+                    if (e == null) continue;
+                    sb.append("  nativo=").append(e.name).append(' ').append(e.arch)
+                            .append(' ').append(e.elfType)
+                            .append(" imp=").append(e.importCount)
+                            .append(" exp=").append(e.exportCount)
+                            .append(" jni=").append(e.jniExports.size());
+                    if (!e.needed.isEmpty()) {
+                        sb.append(" necesita=[");
+                        for (int i = 0; i < Math.min(3, e.needed.size()); i++) {
+                            if (i > 0) sb.append(", ");
+                            sb.append(e.needed.get(i));
+                        }
+                        sb.append(']');
+                    }
+                    if (e.hasJniOnLoad) sb.append(" [JNI_OnLoad]");
+                    if (e.partial) sb.append(" [parcial]");
+                    sb.append('\n');
+                }
+                for (int i = 0; i < jni.size() && i < 20; i++) {
+                    AlfaJni.JniLink l = jni.get(i);
+                    sb.append("  jni=").append(l.symbol).append(" -> ")
+                            .append(l.javaClass).append("->").append(l.javaMethod);
+                    if (l.callers.isEmpty()) sb.append(" [sin llamadas]");
+                    else sb.append(" <= ").append(l.callers.get(0));
+                    sb.append('\n');
+                }
+            }
+            List<String> alfaEntries = summarizeAlfaEntries(this);
+            Set<String> exportedDescs = AlfaUi.exportedDescriptors(manifestExported, packageName);
+            int handlerTotal = 0;
+            for (AlfaUi.Screen s : alfaScreens) {
+                if (s != null && s.handlers != null) handlerTotal += s.handlers.size();
+            }
+            sb.append("\n=== UI (pantallas=").append(alfaScreens.size())
+                    .append(" handlers=").append(handlerTotal)
+                    .append(" entradas=").append(alfaEntries.size()).append(") ===\n");
+            if (alfaScreens.isEmpty() && alfaEntries.isEmpty()) {
+                sb.append("  (sin UI analizada)\n");
+            } else {
+                for (int i = 0; i < alfaScreens.size() && i < 10; i++) {
+                    AlfaUi.Screen s = alfaScreens.get(i);
+                    if (s == null) continue;
+                    sb.append("  pantalla=").append(s.layout).append(" vistas=").append(s.views);
+                    if (!s.handlers.isEmpty()) sb.append(" handlers=").append(s.handlers);
+                    if (!s.customViews.isEmpty()) {
+                        sb.append(" custom=").append(s.customViews.size());
+                    }
+                    sb.append('\n');
+                }
+                int shownH = 0;
+                for (AlfaUi.Screen s : alfaScreens) {
+                    if (s == null || s.handlers == null) continue;
+                    for (String h : s.handlers) {
+                        if (shownH >= 10) break;
+                        List<String> cs = AlfaUi.handlerCallers(graph, h);
+                        sb.append("  handler=").append(s.layout).append(' ').append(h);
+                        if (cs.isEmpty()) sb.append(" [sin código]");
+                        else sb.append(" <= ").append(cs.get(0));
+                        sb.append('\n');
+                        shownH++;
+                    }
+                    if (shownH >= 10) break;
+                }
+                for (int i = 0; i < alfaEntries.size() && i < 20; i++) {
+                    String en = alfaEntries.get(i);
+                    sb.append("  entrada=").append(en);
+                    if (exportedDescs.contains(RefGraph.split(en)[0])) {
+                        sb.append(" [exportada]");
+                    }
+                    sb.append('\n');
+                }
+            }
+            List<AlfaCorr.Chain> chains = null;
+            try {
+                chains = AlfaCorr.correlate(urls, urlOrigin, stringRefs, graph,
+                        manifestPerms, callerPerm);
+            } catch (Throwable ignored) {
+                chains = new ArrayList<>();
+            }
+            int riskyChains = 0;
+            for (AlfaCorr.Chain c : chains) {
+                if (c != null && c.permisoRiesgo && c.permisoDeclarado) riskyChains++;
+            }
+            sb.append("\n=== BLUEPRINT (cadenas=").append(chains.size())
+                    .append(" riesgo=").append(riskyChains).append(") ===\n");
+            sb.append("  mapa: permiso→API→método→destino (").append(urls.size())
+                    .append(" urls, ").append(manifestPerms.size()).append(" permisos, ")
+                    .append(alfaScreens.size()).append(" pantallas, ")
+                    .append(alfaElfs.size()).append(" .so)\n");
+            if (chains.isEmpty()) {
+                sb.append("  (sin cadenas: no hay URLs o no se ligaron a código)\n");
+            } else {
+                for (int i = 0; i < chains.size() && i < 10; i++) {
+                    sb.append("  ").append(AlfaCorr.summarize(chains.get(i))).append('\n');
+                }
+            }
             return sb.toString();
         }
 
@@ -528,6 +641,30 @@ public final class ReaEngine {
                         + (f.inter ? " [inter]" : ""));
             }
             jsonStrList(sb, "taintFlows", taintStrs);
+            sb.append(",\"elfParsed\":").append(alfaElfs.size());
+            List<String> jniStrs = new ArrayList<>();
+            for (AlfaJni.JniLink l : summarizeAlfaJni(this)) {
+                jniStrs.add(l.symbol + " -> " + l.javaClass + "->" + l.javaMethod
+                        + (l.callers.isEmpty() ? "" : " <= " + l.callers.get(0)));
+            }
+            jsonStrList(sb, "jniLinks", jniStrs);
+            sb.append(",\"uiScreens\":").append(alfaScreens.size());
+            jsonStrList(sb, "uiEntries", summarizeAlfaEntries(this));
+            List<String> uiHandlers = new ArrayList<>();
+            for (AlfaUi.Screen s : alfaScreens) {
+                if (s == null || s.handlers == null) continue;
+                for (String h : s.handlers) uiHandlers.add(s.layout + ":" + h);
+            }
+            jsonStrList(sb, "uiHandlers", uiHandlers);
+            List<String> corrStrs = new ArrayList<>();
+            try {
+                List<AlfaCorr.Chain> cs =
+                        AlfaCorr.correlate(urls, urlOrigin, stringRefs, graph,
+                                manifestPerms, callerPerm);
+                for (AlfaCorr.Chain c : cs) corrStrs.add(AlfaCorr.summarize(c));
+            } catch (Throwable ignored) {
+            }
+            jsonStrList(sb, "corrChains", corrStrs);
             SearchPlan.Plan plan = SearchPlan.build(this);
             jsonField(sb, "profile", plan.profile.label, false);
             sb.append(",\"coverage\":{");
@@ -631,6 +768,7 @@ public final class ReaEngine {
                 byte[] manifestBytes = null;
                 byte[] arscBytes = null;
                 List<String> dexNames = new ArrayList<>();
+                List<String> layoutNames = new ArrayList<>();
                 List<String> soNames = new ArrayList<>();
                 List<String> certNames = new ArrayList<>();
                 Enumeration<? extends ZipEntry> en = zip.entries();
@@ -645,7 +783,11 @@ public final class ReaEngine {
                     else if (name.startsWith("lib/") && name.endsWith(".so")) soNames.add(name);
                     else if (name.startsWith("META-INF/") && name.matches(".*\\.(RSA|DSA|EC|rsa|dsa|ec)$"))
                         certNames.add(name);
-                    else if (name.startsWith("res/")) r.resCount++;
+                    else if (name.startsWith("res/")) {
+                        r.resCount++;
+                        if (name.startsWith("res/layout") && name.endsWith(".xml")
+                                && layoutNames.size() < MAX_LAYOUTS) layoutNames.add(name);
+                    }
                     else if (name.startsWith("assets/")) r.assetCount++;
                     detectFrameworkByName(name, frameworks);
                     String pkFile = PackerMarkers.matchFile(name);
@@ -730,6 +872,17 @@ public final class ReaEngine {
                 }
                 if (obfTotal > 0) r.obfuscatedRatio = (double) obfWeighted / obfTotal;
 
+                // Layouts UI.
+                for (String ln : layoutNames) {
+                    ZipEntry e = zip.getEntry(ln);
+                    byte[] lb = e == null ? null : readEntry(zip, e, MAX_LAYOUT_BYTES);
+                    if (lb == null) continue;
+                    String xml = AxmlDecoder.decode(lb);
+                    if (xml == null || xml.isEmpty()) continue;
+                    r.alfaScreens.add(AlfaUi.parseLayout(ln, xml));
+                    if (r.alfaScreens.size() >= MAX_LAYOUTS) break;
+                }
+
                 // ARSC.
                 if (arscBytes != null) {
                     ArscStrings.ArscInfo ai = ArscStrings.parse(arscBytes);
@@ -744,13 +897,32 @@ public final class ReaEngine {
                 }
 
                 // Nativas: inventario + arquitectura por cabecera ELF + etiqueta conocida.
+                int elfParsed = 0;
                 for (String so : soNames) {
                     ZipEntry e = zip.getEntry(so);
                     byte[] head = e == null ? null : readPrefix(zip, e, 64);
                     String tag = NativeTable.classify(so);
                     r.nativeLibs.add(so + " (" + elfArch(head) + ")"
                             + (tag == null ? "" : " [" + tag + "]"));
+                    if (e != null && elfParsed < MAX_ELF_LIBS) {
+                        HeadTail ht = readHeadTail(zip, e, ELF_HEAD_CAP, ELF_TAIL_CAP);
+                        if (ht == null) {
+                            r.dexNotes.add("elf " + so + ": omitido por tamaño");
+                        } else {
+                            AlfaElf.ElfInfo ei = AlfaElf.parse(so, ht.head, ht.tail,
+                                    ht.tailStart, ht.fileSize);
+                            if (ei.error == null) {
+                                r.alfaElfs.add(ei);
+                            } else {
+                                r.dexNotes.add("elf " + so + ": " + ei.error);
+                            }
+                            elfParsed++;
+                        }
+                    }
                     if (r.nativeLibs.size() >= 100) break;
+                }
+                if (soNames.size() > MAX_ELF_LIBS) {
+                    r.dexNotes.add("elf: parseados " + MAX_ELF_LIBS + " de " + soNames.size());
                 }
                 // Flutter AOT: tamaño y strings de libapp.so.
                 String libapp = pickLibApp(soNames);
@@ -1053,6 +1225,10 @@ public final class ReaEngine {
                 }
                 String perm = PermApiTable.permissionFor(e.callee);
                 if (perm != null && usedPermSet.size() < 60) usedPermSet.add(perm);
+                if (perm != null && e.caller != null && r.callerPerm.size() < 4000
+                        && !r.callerPerm.containsKey(e.caller)) {
+                    r.callerPerm.put(e.caller, perm + "|" + e.callee);
+                }
             }
             if (cr.truncated) r.dexNotes.add("llamadas: topes alcanzados (muestra parcial)");
             if (cr.stringsTruncated) noteOnce(r, "cadenas: topes alcanzados (muestra parcial)");
@@ -1263,6 +1439,76 @@ public final class ReaEngine {
                 }
             }
         } catch (Exception e2) {
+            return null;
+        }
+    }
+
+    /** Ventanas cabeza+cola de una entrada grande. Nunca lanza. */
+    static class HeadTail {
+        byte[] head = new byte[0];
+        byte[] tail = new byte[0];
+        long tailStart;
+        long fileSize;
+    }
+
+    /**
+     * Lee una entrada en una pasada reteniendo cabeza (headCap) y cola
+     * (tailCap). Null si supera MAX_SO_SCAN o falla. Nunca lanza.
+     */
+    static HeadTail readHeadTail(ZipFile zip, ZipEntry e, int headCap, int tailCap) {
+        try {
+            if (zip == null || e == null || headCap <= 0 || tailCap <= 0) return null;
+            long size = e.getSize();
+            if (size > MAX_SO_SCAN) return null;
+            InputStream in = zip.getInputStream(e);
+            try {
+                byte[] head = new byte[headCap];
+                int headLen = 0;
+                byte[] ring = new byte[tailCap];
+                int ringPos = 0;
+                long total = 0;
+                byte[] buf = new byte[65536];
+                int r;
+                while ((r = in.read(buf)) > 0) {
+                    if (total + r > MAX_SO_SCAN) return null;
+                    for (int i = 0; i < r; i++) {
+                        byte v = buf[i];
+                        if (headLen < headCap) head[headLen++] = v;
+                        ring[ringPos] = v;
+                        ringPos = (ringPos + 1) % tailCap;
+                    }
+                    total += r;
+                }
+                if (total == 0) return null;
+                HeadTail ht = new HeadTail();
+                ht.fileSize = total;
+                if (total <= headCap) {
+                    byte[] h = new byte[(int) total];
+                    System.arraycopy(head, 0, h, 0, (int) total);
+                    ht.head = h;
+                    ht.tail = new byte[0];
+                    ht.tailStart = total;
+                } else {
+                    byte[] h = new byte[headCap];
+                    System.arraycopy(head, 0, h, 0, headCap);
+                    ht.head = h;
+                    int tailLen = (int) Math.min(total, (long) tailCap);
+                    byte[] t = new byte[tailLen];
+                    int start = (int) ((ringPos - tailLen + tailCap) % tailCap);
+                    for (int i = 0; i < tailLen; i++) {
+                        t[i] = ring[(start + i) % tailCap];
+                    }
+                    ht.tail = t;
+                    ht.tailStart = total - tailLen;
+                }
+                return ht;
+            } finally {
+                try {
+                    in.close();
+                } catch (Exception ignored) {
+                }
+            }
+        } catch (Throwable ignored) {
             return null;
         }
     }
@@ -1761,6 +2007,7 @@ public final class ReaEngine {
             feedIntelRed(r);
             feedIntelRoles(r);
             feedIntelFlow(r);
+            feedIntelAlfa(r);
             feedIntelPlan(r);
         } catch (Throwable ignored) {
         }
@@ -1863,6 +2110,39 @@ public final class ReaEngine {
         } catch (Throwable ignored) {
         }
         return "?";
+    }
+
+    /**
+     * Enlaces JNI de los ELF parseados con el grafo (perezoso: lo usan
+     * toText, toJson y feedIntel). Nunca null ni lanza.
+     */
+    static List<AlfaJni.JniLink> summarizeAlfaJni(ApkReport r) {
+        List<AlfaJni.JniLink> out = new ArrayList<>();
+        try {
+            if (r == null || r.alfaElfs == null || r.alfaElfs.isEmpty()) return out;
+            List<String> syms = new ArrayList<>();
+            for (AlfaElf.ElfInfo e : r.alfaElfs) {
+                if (e == null || e.jniExports == null) continue;
+                for (String s : e.jniExports) {
+                    if (s != null && !syms.contains(s)) syms.add(s);
+                }
+            }
+            out = AlfaJni.link(syms, r.graph);
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
+    /**
+     * Entradas UI verificadas (perezoso). Nunca null ni lanza.
+     */
+    static List<String> summarizeAlfaEntries(ApkReport r) {
+        try {
+            if (r == null) return new ArrayList<>();
+            return AlfaUi.verifiedEntries(r.graph, r.manifestClasses);
+        } catch (Throwable ignored) {
+            return new ArrayList<>();
+        }
     }
 
     /** Resumen RED precomputado (lo usan toText y toJson). Nunca lanza. */
@@ -2074,6 +2354,107 @@ public final class ReaEngine {
     }
 
     /**
+     * ALFA: librerías con JNI, enlaces JNI con llamadas, entradas
+     * exportadas, handlers UI y cadenas permiso→destino pasan al registro.
+     * Confianza MEDIA/LOW según evidencia y nunca se afirma ejecución.
+     * Topes 10+20+20+10+10. Nunca lanza.
+     */
+    static void feedIntelAlfa(ApkReport r) {
+        try {
+            if (r == null || r.intel == null) return;
+            int added = 0;
+            if (r.alfaElfs != null) {
+                for (AlfaElf.ElfInfo e : r.alfaElfs) {
+                    if (added >= 10 || e == null) break;
+                    if (e.jniExports == null || e.jniExports.isEmpty()) continue;
+                    IntelFinding inf = IntelFinding.create("nativo",
+                            e.name + ": " + e.jniExports.size() + " JNI (" + e.arch + ")");
+                    inf.evidence = "exports ELF" + (e.hasJniOnLoad ? " + JNI_OnLoad" : "");
+                    inf.confidence = IntelFinding.Confidence.MEDIUM;
+                    inf.evidenceType = IntelFinding.EvidenceType.STATIC;
+                    inf.limitations = "símbolos dinámicos; registro dinámico"
+                            + " (RegisterNatives) no visible";
+                    if (r.intel.add(inf)) added++;
+                }
+            }
+            int addedJ = 0;
+            for (AlfaJni.JniLink l : summarizeAlfaJni(r)) {
+                if (addedJ >= 20 || l == null) break;
+                if (l.callers.isEmpty()) continue;
+                IntelFinding inf = IntelFinding.create("jni",
+                        l.javaClass + "->" + l.javaMethod + " implementado en nativo");
+                inf.className = l.javaClass;
+                inf.methodName = l.javaMethod;
+                inf.evidence = l.symbol + " <= " + l.callers.get(0);
+                inf.confidence = IntelFinding.Confidence.MEDIUM;
+                inf.evidenceType = IntelFinding.EvidenceType.STATIC;
+                inf.limitations = "llamada estática respaldada por instrucción DEX;"
+                        + " ejecución no observada";
+                if (r.intel.add(inf)) addedJ++;
+            }
+            Set<String> exportedDescs =
+                    AlfaUi.exportedDescriptors(r.manifestExported, r.packageName);
+            int addedE = 0;
+            for (String en : summarizeAlfaEntries(r)) {
+                if (addedE >= 20 || en == null) break;
+                String[] parts = RefGraph.split(en);
+                if (!exportedDescs.contains(parts[0])) continue;
+                IntelFinding inf = IntelFinding.create("entrada",
+                        "entry point exportado: " + en);
+                inf.className = parts[0];
+                inf.methodName = parts[1];
+                inf.evidence = "componente exportado + llamador en grafo";
+                inf.confidence = IntelFinding.Confidence.MEDIUM;
+                inf.evidenceType = IntelFinding.EvidenceType.STATIC;
+                inf.limitations = "alcanzabilidad externa no demostrada;"
+                        + " ejecución no observada";
+                if (r.intel.add(inf)) addedE++;
+            }
+            int addedU = 0;
+            if (r.alfaScreens != null) {
+                for (AlfaUi.Screen s : r.alfaScreens) {
+                    if (addedU >= 10 || s == null || s.handlers == null) break;
+                    for (String h : s.handlers) {
+                        if (addedU >= 10 || h == null) break;
+                        List<String> cs = AlfaUi.handlerCallers(r.graph, h);
+                        if (cs.isEmpty()) continue;
+                        IntelFinding inf = IntelFinding.create("ui",
+                                "handler onClick " + h + " en " + s.layout);
+                        inf.evidence = "unión por nombre: " + cs.get(0);
+                        inf.confidence = IntelFinding.Confidence.LOW;
+                        inf.evidenceType = IntelFinding.EvidenceType.INFERRED;
+                        inf.limitations = "layout↔actividad no resuelto;"
+                                + " ejecución no observada";
+                        if (r.intel.add(inf)) addedU++;
+                    }
+                }
+            }
+            int addedC = 0;
+            List<AlfaCorr.Chain> chains = AlfaCorr.correlate(
+                    r.urls, r.urlOrigin, r.stringRefs, r.graph, r.manifestPerms,
+                    r.callerPerm);
+            for (AlfaCorr.Chain c : chains) {
+                if (addedC >= 10 || c == null) break;
+                if (c.metodos.isEmpty()) continue;
+                IntelFinding inf = IntelFinding.create("correlacion",
+                        "cadena " + c.permiso + " → " + c.host);
+                inf.evidence = AlfaCorr.summarize(c);
+                if (c.permisoDeclarado && !"?".equals(c.permiso)) {
+                    inf.confidence = IntelFinding.Confidence.MEDIUM;
+                    inf.evidenceType = IntelFinding.EvidenceType.STATIC;
+                } else {
+                    inf.confidence = IntelFinding.Confidence.LOW;
+                    inf.evidenceType = IntelFinding.EvidenceType.INFERRED;
+                }
+                inf.limitations = "correlación estática por literal compartido;"
+                        + " ejecución no observada";
+                if (r.intel.add(inf)) addedC++;
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
      * OMEGA plan RAG: un hallazgo con el perfil y el recuento de estados.
      * Nunca lanza.
      */
@@ -2124,7 +2505,9 @@ public final class ReaEngine {
         r.limitations.add("Flujo de datos parcial: def-use/taint best-effort con topes (inter de un salto, sin heap ni reflexión).");
         r.limitations.add("Sin análisis dinámico (Frida/adb): estático únicamente.");
         r.limitations.add("AXML y ARSC decodificados con parser propio (best-effort).");
-        r.limitations.add("Nativas: solo inventario y arquitectura ELF, sin desensamblado.");
+        r.limitations.add("Nativas: ELF parseado (símbolos/JNI), sin desensamblado ni RegisterNatives.");
+        r.limitations.add("UI: layouts sin resolver setContentView; handlers unidos por nombre.");
+        r.limitations.add("Blueprint: correlación por literal compartido, no flujo verificado.");
         r.limitations.add("Muestreo con topes en APKs grandes (ver notas).");
         r.unknowns.add("Comportamiento en ejecución (runtime).");
         r.unknowns.add("Contenido descargado, generado o descifrado en runtime.");

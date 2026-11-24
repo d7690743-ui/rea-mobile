@@ -351,6 +351,14 @@ public final class SearchPlan {
         }
         if ("nativas".equals(id)) {
             if (empty(r.nativeLibs)) return state(id, State.NOT_FOUND_IN_SCOPE, "sin .so");
+            int elfs = r.alfaElfs == null ? 0 : r.alfaElfs.size();
+            if (elfs > 0) {
+                int jni = 0;
+                for (AlfaElf.ElfInfo e : r.alfaElfs) {
+                    if (e != null && e.jniExports != null) jni += e.jniExports.size();
+                }
+                return state(id, State.PARTIAL, elfs + " ELF, " + jni + " JNI");
+            }
             return state(id, State.PARTIAL, "inventario ELF, sin desensamblado");
         }
         if ("ofuscacion".equals(id)) {
