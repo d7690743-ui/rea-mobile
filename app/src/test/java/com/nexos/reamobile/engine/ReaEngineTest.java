@@ -322,16 +322,17 @@ public class ReaEngineTest {
         r.recSoTotal = 0;
         r.manifestXml = "<manifest/>";
         r.sigScheme = "v2";
-        // 30*1 + 10*0 + 5*.5 + 10*1 + 10*1 + 10*.5 + 10*1 + 5*1 = 72.5/95 ≈ 76
-        assertEquals(76, ReaEngine.recoveryIndex(r));
+        // 30*1 + 10*0 + 5*.5 + 10*1 + 10*1 + 10*.5 + 10*1 + 5*1 = 72.5/90 ≈ 81
+        // (secretos y nativas con total 0 se excluyen del denominador: n/a)
+        assertEquals(81, ReaEngine.recoveryIndex(r));
         String txt = r.toText();
-        assertTrue(txt, txt.contains("=== RECUPERACIÓN (índice≈76%) ==="));
+        assertTrue(txt, txt.contains("=== RECUPERACIÓN (índice≈81%) ==="));
         assertTrue(txt, txt.contains("clases=10/10"));
         assertTrue(txt, txt.contains("secretos=n/a"));
         assertTrue(txt, txt.contains("arsc-tabla=20 entradas"));
         assertEquals(-1, ReaEngine.recoveryIndex(null));
         String js = r.toJson();
-        assertTrue(js, js.contains("\"recIndex\":76"));
+        assertTrue(js, js.contains("\"recIndex\":81"));
     }
 
     @Test
