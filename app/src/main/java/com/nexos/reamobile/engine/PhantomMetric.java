@@ -1,7 +1,9 @@
 package com.nexos.reamobile.engine;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * PHANTOM métrica: completitud reconstructiva por función
@@ -36,25 +38,125 @@ public final class PhantomMetric {
                                       List<PhantomStore.StoreHit> store,
                                       List<AlfaJni.JniLink> jniLinks,
                                       List<PhantomJni.DynLink> dynLinks) {
+        completeStates(groups, data, store, jniLinks, dynLinks, null);
+    }
+
+    /**
+     * Variante P2.1b con grafo: además del cruce por muestra (barato),
+     * cierre exacto por grupo (subgrafo depth-3 + clases llamadas, solo
+     * transitorio) para que los hallazgos fuera de la muestra también
+     * levanten el campo. Nunca lanza.
+     */
+    public static void completeStates(List<PhantomGroup.FuncGroup> groups,
+                                      List<PhantomData.DataHit> data,
+                                      List<PhantomStore.StoreHit> store,
+                                      List<AlfaJni.JniLink> jniLinks,
+                                      List<PhantomJni.DynLink> dynLinks,
+                                      RefGraph graph) {
         try {
             if (groups == null) return;
             for (PhantomGroup.FuncGroup g : groups) {
                 if (g == null) continue;
-                g.states[3] = matchData(g, data);
-                g.states[6] = matchStore(g, store);
-                g.states[7] = matchNative(g, jniLinks, dynLinks);
+                Closure c = graph == null ? null : closureFor(graph, g);
+                g.states[3] = matchData(g, data, c);
+                g.states[6] = matchStore(g, store, c);
+                g.states[7] = matchNative(g, jniLinks, dynLinks, c);
             }
         } catch (Throwable ignored) {
         }
     }
 
-    private static int matchData(PhantomGroup.FuncGroup g, List<PhantomData.DataHit> data) {
+    /** Cierre transitorio de un grupo (no se retiene). Nunca lanza. */
+    static class Closure {
+        final Set<String> methods = new LinkedHashSet<>();
+        final Set<String> calleeClasses = new LinkedHashSet<>();
+    }
+
+    /**
+     * Subgrafo depth-N desde las entradas + clases llamadas por él
+     * (caza modelos/helpers usados aunque el framework los invoque).
+     * Misma profundidad que el agrupador; topes 150/500.
+     * Nunca null ni lanza.
+     */
+    static Closure closureFor(RefGraph graph, PhantomGroup.FuncGroup g) {
+        Closure c = new Closure();
+        try {
+            if (graph == null || g == null || g.entries == null) return c;
+            List<String> frontier = new ArrayList<>();
+            for (String e : g.entries) {
+                if (e != null && c.methods.add(e) && frontier.size() < 150) {
+                    frontier.add(e);
+                }
+            }
+            int depth = PhantomGroup.MAX_DEPTH;
+            if (depth < 1 || depth > 8) depth = 5;
+            for (int d = 0; d < depth && c.methods.size() < 150; d++) {
+                List<String> next = new ArrayList<>();
+                for (String m : frontier) {
+                    if (c.methods.size() >= 150) break;
+                    for (String cal : graph.calleesOf(m)) {
+                        if (cal == null || !c.methods.add(cal)) continue;
+                        if (next.size() < 150) next.add(cal);
+                        if (c.methods.size() >= 150) break;
+                    }
+                }
+                frontier = next;
+                if (frontier.isEmpty()) break;
+            }
+            for (String m : c.methods) {
+                if (c.calleeClasses.size() >= 500) break;
+                for (String cal : graph.calleesOf(m)) {
+                    if (cal == null) continue;
+                    int a = cal.indexOf(";->");
+                    if (a > 0 && c.calleeClasses.size() < 500) {
+                        c.calleeClasses.add(cal.substring(0, a + 1));
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return c;
+    }
+
+    /** Método usuario citado en la evidencia ("…por Lcom/x;->m"), o null. */
+    static String evidenceUser(String evidence) {
+        try {
+            if (evidence == null) return null;
+            int p = evidence.indexOf("por ");
+            if (p < 0) return null;
+            String m = evidence.substring(p + 4).trim();
+            int sp = m.indexOf(' ');
+            if (sp > 0) m = m.substring(0, sp);
+            return m.contains(";->") ? m : null;
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** Clase de un descriptor o de "Lcls;->m". "" si no hay. Nunca lanza. */
+    static String classOf(String ref) {
+        try {
+            if (ref == null) return "";
+            int a = ref.indexOf(";->");
+            String cls = a < 0 ? ref : ref.substring(0, a + 1);
+            return cls.startsWith("L") ? cls : "";
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    private static int matchData(PhantomGroup.FuncGroup g, List<PhantomData.DataHit> data,
+                                 Closure c) {
         try {
             if (data == null) return PhantomGroup.FALTA;
             boolean partial = false;
             for (PhantomData.DataHit h : data) {
                 if (h == null) continue;
                 if (mentions(h.detail, h.evidence, g)) {
+                    if ("modelo?".equals(h.kind)) partial = true;
+                    else return PhantomGroup.OK;
+                }
+                if (c != null && inClosure(h.detail, h.evidence, c)) {
                     if ("modelo?".equals(h.kind)) partial = true;
                     else return PhantomGroup.OK;
                 }
@@ -65,13 +167,18 @@ public final class PhantomMetric {
         }
     }
 
-    private static int matchStore(PhantomGroup.FuncGroup g, List<PhantomStore.StoreHit> store) {
+    private static int matchStore(PhantomGroup.FuncGroup g, List<PhantomStore.StoreHit> store,
+                                  Closure c) {
         try {
             if (store == null) return PhantomGroup.FALTA;
             boolean partial = false;
             for (PhantomStore.StoreHit h : store) {
                 if (h == null) continue;
                 if (mentions(h.detail, h.evidence, g)) {
+                    if ("prefs".equals(h.kind) && "?".equals(h.detail)) partial = true;
+                    else return PhantomGroup.OK;
+                }
+                if (c != null && inClosure(h.detail, h.evidence, c)) {
                     if ("prefs".equals(h.kind) && "?".equals(h.detail)) partial = true;
                     else return PhantomGroup.OK;
                 }
@@ -82,22 +189,49 @@ public final class PhantomMetric {
         }
     }
 
+    /**
+     * true si el hallazgo pertenece al cierre: método en el subgrafo,
+     * usuario en el subgrafo, o clase usada por el subgrafo. Nunca lanza.
+     */
+    static boolean inClosure(String detail, String evidence, Closure c) {
+        try {
+            if (c == null) return false;
+            if (detail != null) {
+                if (c.methods.contains(detail)) return true;
+                String cls = classOf(detail);
+                if (!cls.isEmpty() && c.calleeClasses.contains(cls)) return true;
+            }
+            String u = evidenceUser(evidence);
+            if (u != null && c.methods.contains(u)) return true;
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
     private static int matchNative(PhantomGroup.FuncGroup g, List<AlfaJni.JniLink> jniLinks,
-                                   List<PhantomJni.DynLink> dynLinks) {
+                                   List<PhantomJni.DynLink> dynLinks, Closure c) {
         try {
             if (jniLinks != null) {
                 for (AlfaJni.JniLink l : jniLinks) {
                     if (l == null || l.callers == null) continue;
-                    for (String c : l.callers) {
-                        if (c != null && g.methodSample.contains(c)) return PhantomGroup.OK;
+                    for (String caller : l.callers) {
+                        if (caller == null) continue;
+                        if (g.methodSample.contains(caller)) return PhantomGroup.OK;
+                        if (c != null && c.methods.contains(caller)) {
+                            return PhantomGroup.OK;
+                        }
                     }
                 }
             }
             if (dynLinks != null) {
                 for (PhantomJni.DynLink l : dynLinks) {
                     if (l == null || l.callers == null) continue;
-                    for (String c : l.callers) {
-                        if (c != null && g.methodSample.contains(c)) return PhantomGroup.OK;
+                    for (String caller : l.callers) {
+                        if (caller == null) continue;
+                        if (g.methodSample.contains(caller)) return PhantomGroup.OK;
+                        if (c != null && c.methods.contains(caller)) {
+                            return PhantomGroup.OK;
+                        }
                     }
                 }
             }
@@ -109,12 +243,16 @@ public final class PhantomMetric {
     private static boolean mentions(String detail, String evidence,
                                     PhantomGroup.FuncGroup g) {
         try {
-            for (String m : g.methodSample) {
-                if (m == null) continue;
-                if (detail != null && detail.contains(m)) return true;
-                if (evidence != null && evidence.contains(m)) return true;
-                String cls = RefGraph.split(m)[0];
-                if (!"?".equals(cls)) {
+            if (g.methodSample != null) {
+                for (String m : g.methodSample) {
+                    if (m == null) continue;
+                    if (detail != null && detail.contains(m)) return true;
+                    if (evidence != null && evidence.contains(m)) return true;
+                }
+            }
+            if (g.classSample != null) {
+                for (String cls : g.classSample) {
+                    if (cls == null || "?".equals(cls)) continue;
                     if (detail != null && detail.contains(cls)) return true;
                     if (evidence != null && evidence.contains(cls)) return true;
                 }

@@ -54,6 +54,13 @@ public final class PhantomData {
                         h.detail = e.caller;
                         h.evidence = "implementa writeToParcel";
                         r.hits.add(h);
+                    } else if (e.caller.endsWith("->dynamicMethod")
+                            && seen.add("M" + RefGraph.split(e.caller)[0])) {
+                        DataHit h = new DataHit();
+                        h.kind = "proto-model";
+                        h.detail = RefGraph.split(e.caller)[0];
+                        h.evidence = "GeneratedMessageLite.dynamicMethod (protobuf)";
+                        r.hits.add(h);
                     } else if (isJsonLib(e.callee) && seen.add("J" + e.caller + e.callee)) {
                         DataHit h = new DataHit();
                         h.kind = "json-lib";
@@ -87,6 +94,7 @@ public final class PhantomData {
                         break;
                     }
                     if (lit.value == null || lit.value.length() > 300) continue;
+                    if (!isCleanJson(lit.value)) continue;
                     DataHit h = new DataHit();
                     h.kind = "json-lit";
                     h.detail = trim(lit.value);
@@ -98,6 +106,28 @@ public final class PhantomData {
         } catch (Throwable ignored) {
         }
         return r;
+    }
+
+    /**
+     * JSON textual plausible: sin caracteres de control (caza esquemas
+     * proto binarios) y con estructura mínima. Nunca lanza.
+     */
+    static boolean isCleanJson(String s) {
+        try {
+            if (s == null || s.length() < 6) return false;
+            String t = s.trim();
+            boolean struct = t.startsWith("{") || t.startsWith("[")
+                    || t.contains("\":") || t.contains("\":{");
+            if (!struct) return false;
+            for (int i = 0; i < t.length(); i++) {
+                char c = t.charAt(i);
+                if (c < 32 && c != '\t' && c != '\n' && c != '\r') return false;
+                if (c == 0x7F) return false;
+            }
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     private static boolean isJsonLib(String callee) {

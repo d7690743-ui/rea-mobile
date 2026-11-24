@@ -47,6 +47,17 @@ public class PhantomJniTest {
     }
 
     @Test
+    public void rastreoSoConUrls() {
+        byte[] head = bytes("nota https://api.x.test/v1 fin", "nativeGo", "(I)V");
+        PhantomJni.SoResult r = PhantomJni.scanSo(head, null);
+        assertTrue(r.urls.toString(), r.urls.contains("https://api.x.test/v1"));
+        assertTrue(r.jni.toString(), r.jni.contains("nativeGo|(I)V"));
+        assertEquals("https://a.test/x", PhantomJni.extractUrl("v https://a.test/x\""));
+        assertTrue(PhantomJni.extractUrl("sin nada") == null);
+        assertTrue(PhantomJni.extractUrl(null) == null);
+    }
+
+    @Test
     public void uneConLlamadoresPropios() {
         DexCalls.Edge e = new DexCalls.Edge();
         e.caller = "Lcom/x/A;->nativeInit";

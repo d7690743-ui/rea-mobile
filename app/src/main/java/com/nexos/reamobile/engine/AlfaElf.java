@@ -43,6 +43,8 @@ public final class AlfaElf {
         public boolean hasJniOnLoad;
         /** PHANTOM: métodos/firmas tras RegisterNatives (best-effort, tope 40). */
         public List<String> jniDynamic = new ArrayList<>();
+        /** PHANTOM P2.3: URLs http(s) en el .so (tope 20). */
+        public List<String> soUrls = new ArrayList<>();
         public int sectionCount;
         public boolean stripped;
         public boolean partial;

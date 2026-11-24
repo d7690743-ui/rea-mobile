@@ -77,6 +77,23 @@ public class PhantomNetTest {
     }
 
     @Test
+    public void redNativaYToques() {
+        RefGraph g = RefGraph.from(new ArrayList<DexCalls.Edge>(Arrays.asList(
+                edge("Lcom/x/A;->a", "Lorg/chromium/net/CronetEngine;->newUrlRequest"))));
+        assertTrue(PhantomNet.touchers(g).contains("Lcom/x/A;->a"));
+        assertTrue(PhantomNet.touchers(null).isEmpty());
+        AlfaElf.ElfInfo e = new AlfaElf.ElfInfo();
+        e.name = "lib/arm64/libcronet.so";
+        e.soUrls.add("https://example.test/api");
+        List<PhantomNet.Contract> cs = PhantomNet.contracts(null, null, null, g,
+                new ArrayList<String>(), new LinkedHashMap<String, String>(),
+                new ArrayList<AlfaElf.ElfInfo>(Arrays.asList(e)));
+        assertEquals(1, cs.size());
+        assertEquals("so:libcronet.so", cs.get(0).origen);
+        assertTrue(PhantomNet.summarize(cs.get(0)).contains("[origen nativo]"));
+    }
+
+    @Test
     public void indiceInversoYLiterales() {
         String m = "Lcom/x/A;->a";
         StringRefs refs = StringRefs.from(new ArrayList<DexCalls.StringRef>(Arrays.asList(

@@ -58,4 +58,67 @@ public class PhantomMetricTest {
         assertTrue(PhantomMetric.score(g) >= 2);
         PhantomMetric.completeStates(null, null, null, null, null);
     }
+
+    @Test
+    public void casaPorClase() {
+        PhantomGroup.FuncGroup g = new PhantomGroup.FuncGroup();
+        g.id = "FN-01";
+        g.methodSample.add("Lcom/x/Main;->onCreate");
+        g.classSample.add("Lcom/x/Db;");
+        PhantomStore.StoreHit sh = new PhantomStore.StoreHit();
+        sh.kind = "sqlite-helper";
+        sh.detail = "Lcom/x/Db;";
+        sh.evidence = "hereda SQLiteOpenHelper";
+        PhantomData.DataHit dh = new PhantomData.DataHit();
+        dh.kind = "proto-model";
+        dh.detail = "Lcom/x/Db;";
+        dh.evidence = "protobuf";
+        List<PhantomGroup.FuncGroup> gs = new ArrayList<PhantomGroup.FuncGroup>(
+                Arrays.asList(g));
+        PhantomMetric.completeStates(gs,
+                new ArrayList<PhantomData.DataHit>(Arrays.asList(dh)),
+                new ArrayList<PhantomStore.StoreHit>(Arrays.asList(sh)), null, null);
+        assertEquals(PhantomGroup.OK, g.states[3]);
+        assertEquals(PhantomGroup.OK, g.states[6]);
+    }
+
+    @Test
+    public void cierreExactoLevantaCampos() {
+        String e = "Lcom/x/Main;->onCreate";
+        String m = "Lcom/x/Repo;->get";
+        String u = "Lcom/x/Repo;->query";
+        RefGraph g = RefGraph.from(new ArrayList<DexCalls.Edge>(Arrays.asList(
+                PhantomNetTest.edge(e, m),
+                PhantomNetTest.edge(m, u),
+                PhantomNetTest.edge(u, "Lcom/x/Db;->rawQuery"),
+                PhantomNetTest.edge(m, "Lcom/x/Msg;->getId"))));
+        PhantomGroup.FuncGroup fg = new PhantomGroup.FuncGroup();
+        fg.id = "FN-01";
+        fg.entries.add(e);
+        PhantomMetric.Closure c = PhantomMetric.closureFor(g, fg);
+        assertTrue(c.methods.contains(u));
+        assertTrue(c.calleeClasses.contains("Lcom/x/Db;"));
+        assertTrue(!c.methods.contains("Lcom/x/Otro;->zzz"));
+        assertTrue(PhantomMetric.inClosure("Lcom/x/Db;", "hereda X", c));
+        assertTrue(!PhantomMetric.inClosure("Lcom/x/Otro;", "", c));
+        assertEquals("Lcom/x/A;->a",
+                PhantomMetric.evidenceUser("cargado por Lcom/x/A;->a"));
+        assertTrue(PhantomMetric.evidenceUser("sin usuario") == null);
+        assertEquals("Lcom/x/A;", PhantomMetric.classOf("Lcom/x/A;->a"));
+        PhantomStore.StoreHit sh = new PhantomStore.StoreHit();
+        sh.kind = "sqlite-helper";
+        sh.detail = "Lcom/x/Db;";
+        sh.evidence = "hereda SQLiteOpenHelper";
+        PhantomData.DataHit dh = new PhantomData.DataHit();
+        dh.kind = "proto-model";
+        dh.detail = "Lcom/x/Msg;";
+        dh.evidence = "protobuf";
+        List<PhantomGroup.FuncGroup> gs = new ArrayList<PhantomGroup.FuncGroup>(
+                Arrays.asList(fg));
+        PhantomMetric.completeStates(gs,
+                new ArrayList<PhantomData.DataHit>(Arrays.asList(dh)),
+                new ArrayList<PhantomStore.StoreHit>(Arrays.asList(sh)), null, null, g);
+        assertEquals(PhantomGroup.OK, fg.states[6]);
+        assertEquals(PhantomGroup.OK, fg.states[3]);
+    }
 }

@@ -121,6 +121,14 @@ public class ReaEngineTest {
     }
 
     @Test
+    public void conservaDefinidoresDeDatosLib() {
+        assertTrue(ReaEngine.keepDataLibEdge("Laovr;->dynamicMethod"));
+        assertTrue(ReaEngine.keepDataLibEdge("Lcom/x/U;->writeToParcel"));
+        assertTrue(!ReaEngine.keepDataLibEdge("Laovr;->foo"));
+        assertTrue(!ReaEngine.keepDataLibEdge(null));
+    }
+
+    @Test
     public void jsonLlevaRed() {
         ReaEngine.ApkReport r = new ReaEngine.ApkReport();
         DexCalls.Edge e = new DexCalls.Edge();

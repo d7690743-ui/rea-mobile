@@ -1060,12 +1060,15 @@ public final class ReaEngine {
                                     ht.tailStart, ht.fileSize);
                             if (ei.error == null) {
                                 try {
-                                    boolean dyn = ei.hasJniOnLoad
-                                            || (ei.imports != null
-                                            && ei.imports.contains("RegisterNatives"));
-                                    if (dyn) {
-                                        ei.jniDynamic = PhantomJni.scanStrings(
-                                                ht.head, ht.tail);
+                                    PhantomJni.SoResult soScan = PhantomJni.scanSo(
+                                            ht.head, ht.tail);
+                                    if (soScan != null) {
+                                        if (!soScan.jni.isEmpty()) {
+                                            ei.jniDynamic = soScan.jni;
+                                        }
+                                        if (!soScan.urls.isEmpty()) {
+                                            ei.soUrls = soScan.urls;
+                                        }
                                     }
                                 } catch (Throwable ignored) {
                                 }
@@ -1394,12 +1397,16 @@ public final class ReaEngine {
             // suspCalls queda propio (su sección lo afirma); el grafo es más amplio.
             if (pkgSlash != null) {
                 List<DexCalls.Edge> keep = new ArrayList<>();
+                int dataKept = 0;
                 for (DexCalls.Edge e : cr.libEdges) {
                     if (e == null || e.caller == null || e.callee == null) continue;
                     int arrow = e.callee.indexOf("->");
                     String cls = arrow < 0 ? e.callee : e.callee.substring(0, arrow);
                     String name = arrow < 0 ? "" : e.callee.substring(arrow + 2);
-                    if (DexParser.suspiciousLabelWithSupers(cls, name, r.superMap) == null) continue;
+                    if (DexParser.suspiciousLabelWithSupers(cls, name, r.superMap) == null) {
+                        if (!keepDataLibEdge(e.caller) || dataKept >= 500) continue;
+                        dataKept++;
+                    }
                     keep.add(e);
                 }
                 r.graph.addAll(keep);
@@ -1442,6 +1449,21 @@ public final class ReaEngine {
                 noteOnce(r, "flujo: " + fr.skipped + " método(s) grande(s) omitidos");
             }
         } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * true si un llamador lib define datos (proto/parcel): sus aristas se
+     * conservan (tope 500) para que PHANTOM vea modelos ofuscados.
+     * Nunca lanza.
+     */
+    static boolean keepDataLibEdge(String caller) {
+        try {
+            if (caller == null) return false;
+            return caller.endsWith("->dynamicMethod")
+                    || caller.endsWith("->writeToParcel");
+        } catch (Throwable ignored) {
+            return false;
         }
     }
 

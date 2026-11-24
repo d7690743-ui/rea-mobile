@@ -87,6 +87,37 @@ public class PhantomUiTest {
     }
 
     @Test
+    public void claseLlamadaYAprox() {
+        String act = "Lcom/x/Main;->onCreate";
+        IrBuilder.MethodIr ir = new IrBuilder.MethodIr();
+        ir.regs = 2;
+        IrBuilder.Insn l = DefUseTest.insn(0, 0x12, 0);
+        l.hasLit = true;
+        l.lit = 0x7f0b001cL;
+        IrBuilder.Insn inv = DefUseTest.insn(2, 0x6E, 0);
+        IrBuilder.Insn ret = DefUseTest.insn(5, 0x0E);
+        ret.isReturn = true;
+        ir.blocks.add(DefUseTest.block(0, new int[]{}, l, inv, ret));
+        assertEquals("0x7f0b001c", PhantomUi.layoutApprox(ir));
+        assertEquals("", PhantomUi.layoutApprox(null));
+        DexCalls.Edge e = new DexCalls.Edge();
+        e.caller = act;
+        e.callee = "Landroidx/appcompat/app/AppCompatActivity;->setContentView";
+        e.dex = "classes.dex";
+        e.pos = 99;
+        RefGraph g = RefGraph.from(new ArrayList<DexCalls.Edge>(Arrays.asList(e)));
+        Map<String, IrBuilder.MethodIr> irs = new LinkedHashMap<>();
+        irs.put(act, ir);
+        PhantomUi.UiResult r = PhantomUi.resolve(g, new LinkedHashSet<String>(),
+                new ArrayList<AlfaUi.Screen>(), irs);
+        assertEquals(1, r.contentViews.size());
+        assertEquals("Landroidx/appcompat/app/AppCompatActivity;",
+                r.contentViews.get(0).calleeClass);
+        assertTrue(r.contentViews.get(0).layoutApprox);
+        assertTrue(PhantomUi.summarize(r).toString().contains("via AppCompatActivity"));
+    }
+
+    @Test
     public void vacioSinLanzar() {
         PhantomUi.UiResult r = PhantomUi.resolve(null, null, null, null);
         assertTrue(r.contentViews.isEmpty());

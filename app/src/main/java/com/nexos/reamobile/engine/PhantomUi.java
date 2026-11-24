@@ -28,6 +28,10 @@ public final class PhantomUi {
         public String className = "?";
         public boolean inManifest;
         public String layoutId = "";
+        /** P2.5: id por rango R (no verificado en sitio) vs exacto. */
+        public boolean layoutApprox;
+        /** P2.5: clase que declara el setContentView llamado. */
+        public String calleeClass = "?";
         public String dex = "?";
     }
 
@@ -85,8 +89,16 @@ public final class PhantomUi {
                 String[] parts = RefGraph.split(en.getKey());
                 cv.className = parts[0];
                 cv.inManifest = manifestClasses != null && manifestClasses.contains(parts[0]);
-                if (en.getValue() != null && en.getValue().dex != null) cv.dex = en.getValue().dex;
+                if (en.getValue() != null) {
+                    if (en.getValue().dex != null) cv.dex = en.getValue().dex;
+                    cv.calleeClass = RefGraph.split(en.getValue().callee)[0];
+                }
                 cv.layoutId = layoutArg(graph, en.getKey(), parts, flowIrs);
+                if (cv.layoutId.isEmpty()) {
+                    cv.layoutId = layoutApprox(flowIrs == null ? null
+                            : flowIrs.get(en.getKey()));
+                    cv.layoutApprox = !cv.layoutId.isEmpty();
+                }
                 r.contentViews.add(cv);
                 n++;
             }
@@ -142,6 +154,26 @@ public final class PhantomUi {
         return "";
     }
 
+    /**
+     * Primer literal en rango R (0x7f000000-0x7fffffff) en la IR: candidato
+     * LOW cuando el sitio exacto no se verifica. "" si no hay. Nunca lanza.
+     */
+    static String layoutApprox(IrBuilder.MethodIr ir) {
+        try {
+            if (ir == null) return "";
+            ReachConsts.ConstResult cr = ReachConsts.analyze(ir);
+            if (cr == null || cr.callConsts == null) return "";
+            for (ReachConsts.CallConst cc : cr.callConsts) {
+                if (cc == null || cc.kind != ReachConsts.Kind.LIT) continue;
+                if (cc.lit >= 0x7f000000L && cc.lit <= 0x7fffffffL) {
+                    return String.format("0x%08x", cc.lit);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return "";
+    }
+
     /** Líneas para el informe. Nunca lanza. */
     public static List<String> summarize(UiResult r) {
         List<String> out = new ArrayList<>();
@@ -151,7 +183,15 @@ public final class PhantomUi {
                 if (cv == null) continue;
                 StringBuilder sb = new StringBuilder();
                 sb.append(cv.className).append(" setContentView(");
-                sb.append(cv.layoutId.isEmpty() ? "?" : cv.layoutId).append(')');
+                if (cv.layoutId.isEmpty()) sb.append('?');
+                else {
+                    if (cv.layoutApprox) sb.append('~');
+                    sb.append(cv.layoutId);
+                }
+                sb.append(')');
+                if (cv.calleeClass != null && !"?".equals(cv.calleeClass)) {
+                    sb.append(" via ").append(shortName(cv.calleeClass));
+                }
                 sb.append(cv.inManifest ? " [manifest]" : " [no-manifest]");
                 sb.append(" <= ").append(cv.method);
                 out.add(sb.toString());
@@ -170,5 +210,17 @@ public final class PhantomUi {
         } catch (Throwable ignored) {
         }
         return out;
+    }
+
+    private static String shortName(String desc) {
+        try {
+            if (desc == null) return "?";
+            int s = desc.lastIndexOf('/');
+            int e = desc.endsWith(";") ? desc.length() - 1 : desc.length();
+            String t = s < 0 ? desc.substring(0, e) : desc.substring(s + 1, e);
+            return t.isEmpty() ? "?" : t;
+        } catch (Throwable ignored) {
+            return "?";
+        }
     }
 }

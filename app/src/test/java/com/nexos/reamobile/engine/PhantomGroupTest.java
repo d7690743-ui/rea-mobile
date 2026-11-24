@@ -71,6 +71,19 @@ public class PhantomGroupTest {
     }
 
     @Test
+    public void muestraClasesYRedParcial() {
+        Set<String> manifest = new LinkedHashSet<>(Arrays.asList("Lcom/x/Main;"));
+        Set<String> touchers = new LinkedHashSet<>(Arrays.asList("Lcom/x/Api;->fetch"));
+        List<PhantomGroup.FuncGroup> gs = PhantomGroup.group(demoGraph(), manifest,
+                null, null, null, null, touchers);
+        assertEquals(1, gs.size());
+        PhantomGroup.FuncGroup g = gs.get(0);
+        assertTrue(g.classSample.contains("Lcom/x/Main;"));
+        assertTrue(g.classSample.contains("Lcom/x/Api;"));
+        assertEquals(PhantomGroup.PARCIAL, g.states[5]);
+    }
+
+    @Test
     public void sinEntradasSinGrupos() {
         List<PhantomGroup.FuncGroup> gs = PhantomGroup.group(demoGraph(),
                 new LinkedHashSet<String>(), null, null, null, null);

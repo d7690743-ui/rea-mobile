@@ -49,6 +49,14 @@ public class TablesTest {
         assertEquals("CAMERA",
                 PermApiTable.permissionFor("Landroid/hardware/Camera;->open()V"));
         assertEquals("INTERNET", PermApiTable.permissionFor("Ljava/net/URL;-><init>"));
+        assertEquals("INTERNET",
+                PermApiTable.permissionFor("Lorg/chromium/net/CronetEngine;->newUrlRequest"));
+        assertEquals("INTERNET",
+                PermApiTable.permissionFor("Lretrofit2/Retrofit;->create"));
+        assertEquals("INTERNET",
+                PermApiTable.permissionFor("Lcom/android/volley/RequestQueue;->add"));
+        assertEquals("WAKE_LOCK",
+                PermApiTable.permissionFor("Landroid/os/PowerManager;->newWakeLock"));
         assertNull(PermApiTable.permissionFor("Ljava/lang/String;->length()I"));
         assertNull(PermApiTable.permissionFor(null));
         assertTrue(PermApiTable.isRisky("android.permission.MANAGE_EXTERNAL_STORAGE"));

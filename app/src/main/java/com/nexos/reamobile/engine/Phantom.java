@@ -4,6 +4,7 @@ import com.nexos.reamobile.intelligence.IntelFinding;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Motor PHANTOM: paquete de conocimiento reconstructivo. Trabaja EN CONJUNTO
@@ -43,17 +44,23 @@ public final class Phantom {
             if (r == null) return p;
             List<AlfaJni.JniLink> jniLinks = ReaEngine.summarizeAlfaJni(r);
             p.contracts = PhantomNet.contracts(r.urls, r.urlOrigin, r.stringRefs,
-                    r.graph, r.manifestPerms, r.callerPerm);
+                    r.graph, r.manifestPerms, r.callerPerm, r.alfaElfs);
             p.ui = PhantomUi.resolve(r.graph, r.manifestClasses, r.alfaScreens, r.flowIrs);
             p.store = PhantomStore.analyze(r.superMap, r.stringRefs, r.graph);
             p.data = PhantomData.analyze(r.graph, r.stringRefs, r.appClasses);
             p.dynJni = PhantomJni.link(r.alfaElfs, r.graph);
             List<PhantomUi.ContentView> cvs = p.ui == null ? null : p.ui.contentViews;
+            Set<String> touchers = null;
+            try {
+                touchers = PhantomNet.touchers(r.graph);
+            } catch (Throwable ignored) {
+                touchers = null;
+            }
             p.groups = PhantomGroup.group(r.graph, r.manifestClasses, r.urls,
-                    r.stringRefs, r.callerPerm, cvs);
+                    r.stringRefs, r.callerPerm, cvs, touchers);
             List<PhantomData.DataHit> dh = p.data == null ? null : p.data.hits;
             List<PhantomStore.StoreHit> sh = p.store == null ? null : p.store.hits;
-            PhantomMetric.completeStates(p.groups, dh, sh, jniLinks, p.dynJni);
+            PhantomMetric.completeStates(p.groups, dh, sh, jniLinks, p.dynJni, r.graph);
             List<Taint.Flow> base = null;
             try {
                 ReaEngine.FlowSummary fs = r.flow();

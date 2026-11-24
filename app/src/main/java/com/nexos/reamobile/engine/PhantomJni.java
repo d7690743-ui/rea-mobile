@@ -17,8 +17,15 @@ public final class PhantomJni {
     }
 
     public static final int MAX_CANDIDATES = 40;
+    public static final int MAX_SO_URLS = 20;
     public static final int MAX_STR_LEN = 128;
     public static final int MIN_STR_LEN = 4;
+
+    /** Resultado del rastreo .so en una pasada (P2.6). Nunca lanza. */
+    public static class SoResult {
+        public List<String> jni = new ArrayList<>();
+        public List<String> urls = new ArrayList<>();
+    }
 
     /** Método dinámico candidato con su librería y llamadores. Nunca lanza. */
     public static class DynLink {
@@ -39,44 +46,72 @@ public final class PhantomJni {
 
     /** Variante con tope inyectable (tests). Nunca null ni lanza. */
     static List<String> scanStrings(byte[] head, byte[] tail, int cap) {
-        List<String> out = new ArrayList<>();
-        Set<String> seen = new LinkedHashSet<>();
         try {
-            int lim = cap <= 0 ? MAX_CANDIDATES : Math.min(cap, 200);
-            List<String> window = new ArrayList<>();
-            scanBuf(head, window, out, seen, lim);
-            scanBuf(tail, window, out, seen, lim);
+            SoResult r = scanSo(head, tail, cap, 0);
+            return r == null ? new ArrayList<String>() : r.jni;
         } catch (Throwable ignored) {
+            return new ArrayList<String>();
         }
-        return out;
     }
 
-    private static void scanBuf(byte[] buf, List<String> window, List<String> out,
-                                Set<String> seen, int lim) {
+    /**
+     * Una pasada sobre head/tail: pares JNI + URLs nativas (P2.3/P2.6).
+     * Autolimitado; ventanilla mínima transitoria. Nunca null ni lanza.
+     */
+    public static SoResult scanSo(byte[] head, byte[] tail) {
+        return scanSo(head, tail, MAX_CANDIDATES, MAX_SO_URLS);
+    }
+
+    /** Variante con topes inyectables (tests). Nunca null ni lanza. */
+    static SoResult scanSo(byte[] head, byte[] tail, int capJni, int capUrls) {
+        SoResult r = new SoResult();
+        Set<String> seenJ = new LinkedHashSet<>();
+        Set<String> seenU = new LinkedHashSet<>();
         try {
-            if (buf == null || out.size() >= lim) return;
+            int limJ = capJni <= 0 ? MAX_CANDIDATES : Math.min(capJni, 200);
+            int limU = capUrls < 0 ? 0 : Math.min(capUrls, 100);
+            List<String> window = new ArrayList<>();
+            scanBuf(head, window, r, seenJ, seenU, limJ, limU);
+            scanBuf(tail, window, r, seenJ, seenU, limJ, limU);
+        } catch (Throwable ignored) {
+        }
+        return r;
+    }
+
+    private static void scanBuf(byte[] buf, List<String> window, SoResult r,
+                                Set<String> seenJ, Set<String> seenU,
+                                int limJ, int limU) {
+        try {
+            if (buf == null) return;
             StringBuilder cur = new StringBuilder();
-            for (int i = 0; i < buf.length && out.size() < lim; i++) {
+            for (int i = 0; i < buf.length; i++) {
+                if (r.jni.size() >= limJ && r.urls.size() >= limU) return;
                 int c = buf[i] & 0xFF;
                 if (c >= 32 && c < 127) {
                     if (cur.length() < MAX_STR_LEN) cur.append((char) c);
                 } else {
                     if (cur.length() >= MIN_STR_LEN) {
-                        consider(cur.toString(), window, out, seen, lim);
+                        consider(cur.toString(), window, r, seenJ, seenU, limJ, limU);
                     }
                     cur.setLength(0);
                 }
             }
-            if (cur.length() >= MIN_STR_LEN && out.size() < lim) {
-                consider(cur.toString(), window, out, seen, lim);
+            if (cur.length() >= MIN_STR_LEN) {
+                consider(cur.toString(), window, r, seenJ, seenU, limJ, limU);
             }
         } catch (Throwable ignored) {
         }
     }
 
-    private static void consider(String s, List<String> window, List<String> out,
-                                 Set<String> seen, int lim) {
+    private static void consider(String s, List<String> window, SoResult r,
+                                 Set<String> seenJ, Set<String> seenU,
+                                 int limJ, int limU) {
         try {
+            if (r.urls.size() < limU) {
+                String u = extractUrl(s);
+                if (u != null && seenU.add(u)) r.urls.add(u);
+            }
+            if (r.jni.size() >= limJ) return;
             if (isJniSig(s)) {
                 String name = null;
                 for (int i = window.size() - 1; i >= 0; i--) {
@@ -87,12 +122,39 @@ public final class PhantomJni {
                     }
                 }
                 String cand = name == null ? s : name + "|" + s;
-                if (seen.add(cand) && out.size() < lim) out.add(cand);
+                if (seenJ.add(cand) && r.jni.size() < limJ) r.jni.add(cand);
             } else if (isMethodName(s)) {
                 window.add(s);
                 if (window.size() > 4) window.remove(0);
             }
         } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * Primera URL http(s) dentro del string, recortada por espacios y
+     * comillas. Null si no hay. Nunca lanza.
+     */
+    static String extractUrl(String s) {
+        try {
+            if (s == null) return null;
+            int i = s.indexOf("https://");
+            int j = s.indexOf("http://");
+            int k = i >= 0 ? i : j;
+            if (i >= 0 && j >= 0) k = Math.min(i, j);
+            if (k < 0) return null;
+            int e = k;
+            while (e < s.length()) {
+                char c = s.charAt(e);
+                if (c <= 32 || c == '"' || c == '\'' || c == '<' || c == '>'
+                        || c == '\\') break;
+                e++;
+            }
+            String u = s.substring(k, e);
+            if (u.length() < 12 || u.endsWith("://")) return null;
+            return u;
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 

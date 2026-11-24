@@ -36,4 +36,18 @@ public class PhantomDataTest {
         assertTrue(v.hits.isEmpty());
         assertTrue(PhantomData.summarize(null).isEmpty());
     }
+
+    @Test
+    public void protoModelYFiltroRuido() {
+        RefGraph g = RefGraph.from(new ArrayList<DexCalls.Edge>(Arrays.asList(
+                PhantomNetTest.edge("Lcom/x/Msg;->dynamicMethod", "Lcom/x/B;->foo"))));
+        PhantomData.DataResult r = PhantomData.analyze(g, null, null);
+        assertEquals(1, r.hits.size());
+        assertEquals("proto-model", r.hits.get(0).kind);
+        assertEquals("Lcom/x/Msg;", r.hits.get(0).detail);
+        assertTrue(PhantomData.isCleanJson("{\"name\":\"x\"}"));
+        assertTrue(!PhantomData.isCleanJson("*" + ((char) 0) + "R\":bin"));
+        assertTrue(!PhantomData.isCleanJson("hola"));
+        assertTrue(!PhantomData.isCleanJson(null));
+    }
 }

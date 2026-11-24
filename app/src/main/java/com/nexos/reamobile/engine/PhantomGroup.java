@@ -19,7 +19,7 @@ public final class PhantomGroup {
     }
 
     public static final int MAX_FUNCS = 60;
-    public static final int MAX_DEPTH = 3;
+    public static final int MAX_DEPTH = 5;
     public static final int MAX_METHODS_SCAN = 150;
     public static final int MAX_METHODS_KEEP = 20;
     public static final int MAX_URLS = 10;
@@ -41,6 +41,8 @@ public final class PhantomGroup {
         public String name = "?";
         public List<String> entries = new ArrayList<>();
         public List<String> methodSample = new ArrayList<>();
+        /** Clases del subgrafo completo (P2.1: para cruzar store/datos/nativo). */
+        public List<String> classSample = new ArrayList<>();
         public int methodTotal;
         public int callsOwn;
         public int callsFw;
@@ -109,6 +111,19 @@ public final class PhantomGroup {
                                         List<String> urls, StringRefs stringRefs,
                                         Map<String, String> callerPerm,
                                         List<PhantomUi.ContentView> contentViews) {
+        return group(graph, manifestClasses, urls, stringRefs, callerPerm,
+                contentViews, null);
+    }
+
+    /**
+     * Variante P2.3: red PARCIAL si el subgrafo toca APIs de red aunque no
+     * tenga URL atribuida. Nunca null ni lanza.
+     */
+    public static List<FuncGroup> group(RefGraph graph, Set<String> manifestClasses,
+                                        List<String> urls, StringRefs stringRefs,
+                                        Map<String, String> callerPerm,
+                                        List<PhantomUi.ContentView> contentViews,
+                                        Set<String> netTouchers) {
         List<FuncGroup> out = new ArrayList<>();
         try {
             if (graph == null) return out;
@@ -118,13 +133,14 @@ public final class PhantomGroup {
             if (contentViews != null) {
                 for (PhantomUi.ContentView cv : contentViews) {
                     if (cv == null || cv.className == null) continue;
+                    String id = cv.layoutId == null ? "" : cv.layoutId;
+                    if (!id.isEmpty() && cv.layoutApprox) id = "~" + id;
                     String prev = classToLayout.get(cv.className);
                     if (prev == null) {
-                        classToLayout.put(cv.className,
-                                cv.layoutId == null ? "" : cv.layoutId);
-                    } else if (prev.isEmpty() && cv.layoutId != null
-                            && !cv.layoutId.isEmpty()) {
-                        classToLayout.put(cv.className, cv.layoutId);
+                        classToLayout.put(cv.className, id);
+                    } else if ((prev.isEmpty() || prev.startsWith("~"))
+                            && !id.isEmpty() && !id.startsWith("~")) {
+                        classToLayout.put(cv.className, id);
                     }
                 }
             }
@@ -138,10 +154,19 @@ public final class PhantomGroup {
                 Set<String> seen = new LinkedHashSet<>();
                 bfs(graph, entry, seen);
                 g.methodTotal = seen.size();
+                Set<String> classes = new LinkedHashSet<>();
                 for (String m : seen) {
-                    if (g.methodSample.size() >= MAX_METHODS_KEEP) break;
-                    g.methodSample.add(m);
+                    if (g.methodSample.size() < MAX_METHODS_KEEP && m != null) {
+                        g.methodSample.add(m);
+                    }
+                    if (classes.size() < MAX_METHODS_KEEP && m != null) {
+                        String cls = RefGraph.split(m)[0];
+                        if (!"?".equals(cls)) classes.add(cls);
+                    }
+                    if (g.methodSample.size() >= MAX_METHODS_KEEP
+                            && classes.size() >= MAX_METHODS_KEEP) break;
                 }
+                g.classSample.addAll(classes);
                 countCalls(graph, g, seen);
                 attachUrls(g, urls, stringRefs, seen);
                 attachPerms(g, callerPerm, graph, seen);
@@ -149,7 +174,7 @@ public final class PhantomGroup {
                 g.states[0] = OK;
                 g.states[2] = g.methodTotal > 1 ? OK : (g.methodTotal == 1 ? PARCIAL : FALTA);
                 g.states[4] = g.perms.isEmpty() ? FALTA : OK;
-                g.states[5] = g.urls.isEmpty() ? FALTA : OK;
+                g.states[5] = g.urls.isEmpty() ? touchesNet(seen, netTouchers) : OK;
                 out.add(g);
                 n++;
             }
@@ -224,26 +249,44 @@ public final class PhantomGroup {
                                     RefGraph graph, Set<String> seen) {
         try {
             Set<String> perms = new LinkedHashSet<>();
-            int checked = 0;
-            for (String m : seen) {
-                if (checked++ >= MAX_METHODS_KEEP || perms.size() >= MAX_PERMS) break;
-                if (callerPerm != null) {
+            if (callerPerm != null) {
+                for (String m : seen) {
+                    if (m == null || perms.size() >= MAX_PERMS) break;
                     String hit = callerPerm.get(m);
-                    if (hit != null) {
-                        int bar = hit.indexOf('|');
-                        perms.add(bar < 0 ? hit : hit.substring(0, bar));
-                        continue;
-                    }
+                    if (hit == null) continue;
+                    int bar = hit.indexOf('|');
+                    perms.add(bar < 0 ? hit : hit.substring(0, bar));
                 }
-                for (String c : graph.calleesOf(m)) {
-                    String p = PermApiTable.permissionFor(c);
-                    if (p != null) perms.add(p);
-                    if (perms.size() >= MAX_PERMS) break;
+            }
+            if (perms.size() < MAX_PERMS && graph != null) {
+                int checked = 0;
+                for (String m : seen) {
+                    if (m == null || checked++ >= MAX_METHODS_KEEP
+                            || perms.size() >= MAX_PERMS) break;
+                    if (callerPerm != null && callerPerm.containsKey(m)) continue;
+                    for (String c : graph.calleesOf(m)) {
+                        String p = PermApiTable.permissionFor(c);
+                        if (p != null) perms.add(p);
+                        if (perms.size() >= MAX_PERMS) break;
+                    }
                 }
             }
             g.perms.addAll(perms);
         } catch (Throwable ignored) {
         }
+    }
+
+    private static int touchesNet(Set<String> seen, Set<String> netTouchers) {
+        try {
+            if (seen == null || netTouchers == null || netTouchers.isEmpty()) {
+                return FALTA;
+            }
+            for (String m : seen) {
+                if (m != null && netTouchers.contains(m)) return PARCIAL;
+            }
+        } catch (Throwable ignored) {
+        }
+        return FALTA;
     }
 
     private static void attachScreens(FuncGroup g, Map<String, String> classToLayout,
@@ -256,9 +299,11 @@ public final class PhantomGroup {
                 String cls = RefGraph.split(m)[0];
                 if (!classToLayout.containsKey(cls)) continue;
                 String lid = classToLayout.get(cls);
-                if (lid != null && !lid.isEmpty()) {
+                if (lid != null && !lid.isEmpty() && !lid.startsWith("~")) {
                     out.add(cls + " " + lid);
                     withId = true;
+                } else if (lid != null && lid.startsWith("~")) {
+                    out.add(cls + " (" + lid + ")");
                 } else {
                     out.add(cls + " (layout?)");
                 }

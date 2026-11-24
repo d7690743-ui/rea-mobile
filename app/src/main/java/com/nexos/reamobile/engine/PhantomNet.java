@@ -23,6 +23,10 @@ public final class PhantomNet {
     private static final String[] VERBS = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"};
     private static final String[] CT_HINTS = {"application/json", "application/x-www-form-urlencoded",
             "multipart/form-data", "text/xml", "application/xml", "application/octet-stream"};
+    private static final String[] NET_PREFIXES = {"Ljava/net/", "Ljavax/net/",
+            "Lokhttp3/", "Lcom/squareup/okhttp/", "Lcom/android/volley/",
+            "Lretrofit2/", "Lorg/chromium/net/", "Lorg/apache/http/",
+            "Landroid/webkit/"};
 
     /** Contrato de red observado estáticamente. Nunca lanza. */
     public static class Contract {
@@ -45,35 +49,97 @@ public final class PhantomNet {
                                            StringRefs stringRefs, RefGraph graph,
                                            List<String> manifestPerms,
                                            Map<String, String> callerPerm) {
+        return contracts(urls, urlOrigin, stringRefs, graph, manifestPerms, callerPerm, null);
+    }
+
+    /**
+     * Variante P2.3 con endpoints nativos (.so) como contratos sin llamador
+     * pero con origen. Nunca null ni lanza.
+     */
+    public static List<Contract> contracts(List<String> urls, Map<String, String> urlOrigin,
+                                           StringRefs stringRefs, RefGraph graph,
+                                           List<String> manifestPerms,
+                                           Map<String, String> callerPerm,
+                                           List<AlfaElf.ElfInfo> elfs) {
         List<Contract> out = new ArrayList<>();
         try {
-            if (urls == null || urls.isEmpty() || stringRefs == null) return out;
             Set<String> shortPerms = AlfaCorr.shortNames(manifestPerms);
-            int n = 0;
-            for (String u : urls) {
-                if (u == null || u.isEmpty() || n >= MAX_CONTRACTS) break;
-                Contract c = new Contract();
-                c.url = u;
-                c.host = AlfaCorr.hostOf(u);
-                if (urlOrigin != null && urlOrigin.get(u) != null) c.origen = urlOrigin.get(u);
-                List<String> users = stringRefs.usersOf(u);
-                if (users.isEmpty() && graph != null) {
-                    users = stringRefs.usersOfContaining(u, 25);
+            if (urls != null && stringRefs != null) {
+                for (String u : urls) {
+                    if (u == null || u.isEmpty() || out.size() >= MAX_CONTRACTS) break;
+                    Contract c = new Contract();
+                    c.url = u;
+                    c.host = AlfaCorr.hostOf(u);
+                    if (urlOrigin != null && urlOrigin.get(u) != null) {
+                        c.origen = urlOrigin.get(u);
+                    }
+                    List<String> users = stringRefs.usersOf(u);
+                    if (users.isEmpty() && graph != null) {
+                        users = stringRefs.usersOfContaining(u, 25);
+                    }
+                    Set<String> seen = new LinkedHashSet<>();
+                    for (String m : users) {
+                        if (m == null || !seen.add(m)) continue;
+                        if (c.users.size() >= MAX_USERS) break;
+                        c.users.add(m);
+                    }
+                    observeLiterals(c, stringRefs);
+                    applyPerm(c, callerPerm, shortPerms, graph);
+                    out.add(c);
                 }
-                Set<String> seen = new LinkedHashSet<>();
-                for (String m : users) {
-                    if (m == null || !seen.add(m)) continue;
-                    if (c.users.size() >= MAX_USERS) break;
-                    c.users.add(m);
+            }
+            if (elfs != null) {
+                Set<String> seenU = new LinkedHashSet<>();
+                for (AlfaElf.ElfInfo e : elfs) {
+                    if (e == null || e.soUrls == null) continue;
+                    for (String u : e.soUrls) {
+                        if (u == null || out.size() >= MAX_CONTRACTS) break;
+                        if (!seenU.add(u)) continue;
+                        Contract c = new Contract();
+                        c.url = u;
+                        c.host = AlfaCorr.hostOf(u);
+                        c.origen = "so:" + shortLib(e.name);
+                        out.add(c);
+                    }
+                    if (out.size() >= MAX_CONTRACTS) break;
                 }
-                observeLiterals(c, stringRefs);
-                applyPerm(c, callerPerm, shortPerms, graph);
-                out.add(c);
-                n++;
             }
         } catch (Throwable ignored) {
         }
         return out;
+    }
+
+    /**
+     * Métodos que tocan APIs de red (P2.3: para PARCIAL de grupo cuando no
+     * hay URL atribuida). Una pasada al grafo, tope 2000. Nunca null.
+     */
+    public static Set<String> touchers(RefGraph graph) {
+        Set<String> out = new LinkedHashSet<>();
+        try {
+            if (graph == null) return out;
+            for (RefGraph.RefEdge e : graph.edges()) {
+                if (e == null || e.caller == null || e.callee == null) continue;
+                if (out.size() >= 2000) break;
+                for (String p : NET_PREFIXES) {
+                    if (e.callee.startsWith(p)) {
+                        out.add(e.caller);
+                        break;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
+    private static String shortLib(String name) {
+        try {
+            if (name == null) return "?";
+            int s = name.lastIndexOf('/');
+            return s < 0 ? name : name.substring(s + 1);
+        } catch (Throwable ignored) {
+            return "?";
+        }
     }
 
     private static void observeLiterals(Contract c, StringRefs refs) {
@@ -162,8 +228,12 @@ public final class PhantomNet {
             sb.append(" metodo=").append(c.verbs.isEmpty() ? "?" : join(c.verbs));
             if (!c.contentType.isEmpty()) sb.append(" tipo=").append(c.contentType);
             sb.append(" permiso=").append(c.permiso);
-            if (c.users.isEmpty()) sb.append(" [sin llamador]");
-            else sb.append(" <=").append(c.users.get(0));
+            if (c.users.isEmpty()) {
+                sb.append(c.origen != null && c.origen.startsWith("so:")
+                        ? " [origen nativo]" : " [sin llamador]");
+            } else {
+                sb.append(" <=").append(c.users.get(0));
+            }
             if (!c.payloadHints.isEmpty()) sb.append(" pista=").append(c.payloadHints.get(0));
             sb.append(" (").append(c.origen).append(')');
             return sb.toString();

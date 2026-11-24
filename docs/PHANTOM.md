@@ -85,3 +85,31 @@ LIMITACIONES (actualizadas a conciencia) y el conteo INTELIGENCIA
 - Extracción ZIP (`extractToZip`) sigue con JADX sin prioridad (el visor
   sí la usa): evita retener el report durante JADX.
 - Reflexión/multisalto best-effort; modelos por nombre LOW.
+
+## P2 (incremento sobre informe YTM 4)
+
+Del análisis del primer informe PHANTOM real salieron 6 causas:
+
+- P2.1 matching por clase + cierre exacto: el grupo cruza store/datos/
+  nativo contra su subgrafo depth-5 completo (transitorio, no retenido),
+  no contra la muestra de 20. `classSample` (≤20) + `closureFor`.
+- P2.2 protos + filtro JSON: `dynamicMethod` → `proto-model`;
+  `isCleanJson` rechaza controles (caza el blob proto binario).
+- P2.3 red nativa: `ElfInfo.soUrls` (≤20/lib) + contratos `[origen
+  nativo]` + `touchers()` (red PARCIAL si el subgrafo toca APIs de red).
+- P2.4 PermApiTable+: Cronet/javax/Volley/Retrofit/okhttp→INTERNET,
+  PowerManager→WAKE_LOCK (YTM: WAKE_LOCK ahora visible); lookup de
+  permisos del grupo sobre el subgrafo completo.
+- P2.5 pantallas: clase llamada (`via X`) + candidato `~0x7f…` por rango
+  (PARCIAL, no OK) cuando el sitio no se verifica.
+- P2.6 JNI always-on: `scanSo` en una pasada (JNI+URLs) sin trigger.
+
+Además: `keepDataLibEdge` conserva aristas lib de `dynamicMethod` /
+`writeToParcel` (tope 500/dex) para ver modelos ofuscados; profundidad
+de agrupador y cierre 3→5 con el mismo tope de 150 nodos (coste igual).
+
+Medición YTM 81 MB: analyze 13,4 s, render 0,4 s, pico 140 MB
+(≤ base 149), 64/48 m OK. Grafo 10304→11511 aristas. En APK propia
+(TubeMusic): almacenamiento 2→25 OK. YTM sigue ≤3/8 por causas
+estructurales (código ofuscado = prefijo lib, invisible al grafo;
+tráfico por Cronet nativo; pantallas vía delegate ofuscado).
