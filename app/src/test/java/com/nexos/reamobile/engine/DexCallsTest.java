@@ -52,6 +52,39 @@ public class DexCallsTest {
     }
 
     @Test
+    public void paseFusionadoEquivale() {
+        byte[] dex = buildOwnPlusLibDex();
+        DexCalls.Result uno = DexCalls.collect(dex, "com/x/", "classes.dex", false);
+        DexCalls.Result dos = DexCalls.collect(dex, null, "classes.dex", false);
+        DexCalls.Result fus = DexCalls.collect(dex, "com/x/", "classes.dex", true);
+        assertEquals(claves(uno.edges), claves(fus.edges));
+        java.util.List<String> libEsperadas = new java.util.ArrayList<>();
+        for (DexCalls.Edge e : dos.edges) {
+            if (!e.caller.startsWith("Lcom/x/")) libEsperadas.add(e.caller + " " + e.callee);
+        }
+        assertEquals(libEsperadas, claves(fus.libEdges));
+        assertEquals(uno.supers, fus.supers);
+        assertEquals(dos.supers, fus.supers);
+        assertEquals(valores(uno.strings), valores(fus.strings));
+        assertTrue(fus.codeOffs.containsKey("Lcom/x/A;->foo"));
+        assertTrue(fus.codeOffs.get("Lcom/x/A;->foo") > 0);
+        assertTrue(fus.table != null);
+        assertTrue(!fus.truncated && !fus.libTruncated);
+    }
+
+    static java.util.List<String> claves(java.util.List<DexCalls.Edge> edges) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (DexCalls.Edge e : edges) out.add(e.caller + " " + e.callee);
+        return out;
+    }
+
+    static java.util.List<String> valores(java.util.List<DexCalls.StringRef> refs) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (DexCalls.StringRef s : refs) out.add(s.user + " " + s.value);
+        return out;
+    }
+
+    @Test
     public void entradasMalasNoLanzan() {
         assertTrue(DexCalls.collect(null, "com/x/").edges.isEmpty());
         assertTrue(DexCalls.collect(new byte[10], "com/x/").edges.isEmpty());

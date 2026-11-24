@@ -115,32 +115,19 @@ public final class DexParser {
             info.methodCount = methodIdsSize;
             info.classCount = classDefsSize;
 
-            // 1) Strings.
-            String[] strings = new String[stringIdsSize];
+            // 1) Strings: perezosas (solo se decodifica lo pedido; antes se
+            // decodificaba la tabla entera aunque solo se conservaran 20k).
+            DexStrings strings = DexStrings.of(buf, stringIdsOff, stringIdsSize);
             int keepStrings = Math.min(stringIdsSize, MAX_STRINGS);
-            for (int i = 0; i < stringIdsSize; i++) {
+            for (int i = 0; i < keepStrings; i++) {
                 int idPos = stringIdsOff + i * 4;
-                if (idPos + 4 > buf.length) break;
-                int dataOff = u32(buf, idPos);
-                String s = "";
-                try {
-                    s = readDexString(buf, dataOff);
-                } catch (RuntimeException e) {
-                    s = "";
-                }
-                strings[i] = s;
-                if (i < keepStrings) info.strings.add(s);
+                if (idPos < 0 || idPos + 4 > buf.length) break;
+                info.strings.add(strings.get(i));
             }
             info.stringsTruncated = stringIdsSize > MAX_STRINGS;
 
-            // 2) Tipos.
-            String[] types = new String[typeIdsSize];
-            for (int i = 0; i < typeIdsSize; i++) {
-                int idPos = typeIdsOff + i * 4;
-                if (idPos + 4 > buf.length) break;
-                int descIdx = u32(buf, idPos);
-                types[i] = get(strings, descIdx);
-            }
+            // 2) Tipos: perezosos.
+            DexTypes types = DexTypes.of(buf, typeIdsOff, typeIdsSize, strings);
 
             // 3) Métodos: firmas, stats y sospechosos.
             initStats(info.apiStats);
@@ -151,10 +138,12 @@ public final class DexParser {
                 int classIdx = u16(buf, p);
                 int protoIdx = u16(buf, p + 2);
                 int nameIdx = u32(buf, p + 4);
-                String cls = classIdx < types.length ? types[classIdx] : "?";
-                String name = get(strings, nameIdx);
-                String proto = readProto(buf, protoIdsOff, protoIdsSize, types, strings, protoIdx);
-                if (i < keepMethods) info.methodSample.add(cls + "->" + name + proto);
+                String cls = types.get(classIdx);
+                String name = strings.get(nameIdx);
+                if (i < keepMethods) {
+                    String proto = readProto(buf, protoIdsOff, protoIdsSize, types, protoIdx);
+                    info.methodSample.add(cls + "->" + name + proto);
+                }
                 bucketize(info, cls);
                 matchSuspicious(info, cls, name);
             }
@@ -168,14 +157,14 @@ public final class DexParser {
                 int classIdx = u32(buf, p);
                 int superIdx = u32(buf, p + 8);
                 int srcIdx = u32(buf, p + 16);
-                String cls = (classIdx >= 0 && classIdx < types.length) ? types[classIdx] : "?";
+                String cls = types.get(classIdx);
                 if (isShortName(cls)) shortNames++;
                 if (i < keepClasses) {
                     ClassInfo ci = new ClassInfo();
                     ci.name = cls;
-                    ci.superName = (superIdx == 0xFFFFFFFF || superIdx < 0 || superIdx >= types.length)
-                            ? "-" : types[superIdx];
-                    ci.sourceFile = (srcIdx == 0xFFFFFFFF) ? "-" : get(strings, srcIdx);
+                    ci.superName = (superIdx == 0xFFFFFFFF || superIdx < 0
+                            || superIdx >= types.size()) ? "-" : types.get(superIdx);
+                    ci.sourceFile = (srcIdx == 0xFFFFFFFF) ? "-" : strings.get(srcIdx);
                     info.classes.add(ci);
                 }
             }
@@ -187,8 +176,8 @@ public final class DexParser {
         return info;
     }
 
-    private static String readProto(byte[] buf, int protoOff, int protoSize, String[] types,
-                                    String[] strings, int protoIdx) {
+    private static String readProto(byte[] buf, int protoOff, int protoSize, DexTypes types,
+                                    int protoIdx) {
         try {
             if (protoIdx < 0 || protoIdx >= protoSize) return "(?)";
             int p = protoOff + protoIdx * 12;
@@ -203,21 +192,15 @@ public final class DexParser {
                 for (int i = 0; i < n; i++) {
                     int tp = paramsOff + 4 + i * 2;
                     if (tp + 2 > buf.length) break;
-                    int tIdx = u16(buf, tp);
-                    sb.append(tIdx >= 0 && tIdx < types.length ? types[tIdx] : "?");
+                    sb.append(types.get(u16(buf, tp)));
                 }
             }
             sb.append(')');
-            sb.append(retIdx >= 0 && retIdx < types.length ? types[retIdx] : "?");
+            sb.append(types.get(retIdx));
             return sb.toString();
         } catch (RuntimeException e) {
             return "(?)";
         }
-    }
-
-    private static String readDexString(byte[] buf, int off) {
-        int[] r = AxmlDecoder.readUleb128(buf, off);
-        return decodeMutf8(buf, r[1]);
     }
 
     /** Decodifica MUTF-8 (incluye pares subrogados CESU-8) hasta 0x00. */
@@ -353,11 +336,6 @@ public final class DexParser {
             if (c < 'a' || c > 'z') return false;
         }
         return true;
-    }
-
-    private static String get(String[] arr, int idx) {
-        if (idx < 0 || idx >= arr.length || arr[idx] == null) return "?";
-        return arr[idx];
     }
 
     private static int u16(byte[] b, int p) {

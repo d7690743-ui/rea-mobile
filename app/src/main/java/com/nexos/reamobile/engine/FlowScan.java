@@ -36,6 +36,69 @@ public final class FlowScan {
     }
 
     /**
+     * Construye IRs desde los codeOff que DexCalls ya recolectó, resolviendo
+     * el pool con su misma tabla (sin re-recorrer ni re-decodificar).
+     * codeOffs/table nulos → vacío. Nunca null ni lanza.
+     */
+    public static FlowResult buildFrom(byte[] dex, Map<String, Integer> codeOffs,
+            DexStrings table, String dexName, int budget) {
+        FlowResult r = new FlowResult();
+        String tag = dexName == null ? "?" : dexName;
+        try {
+            if (dex == null || codeOffs == null || codeOffs.isEmpty() || budget <= 0) return r;
+            Set<Integer> wantStr = new LinkedHashSet<>();
+            for (Map.Entry<String, Integer> en : codeOffs.entrySet()) {
+                if (r.irs.size() >= budget) {
+                    r.truncated = true;
+                    break;
+                }
+                if (en.getKey() == null || en.getValue() == null) continue;
+                int codeOff = en.getValue();
+                if (codeOff <= 0 || codeOff + 16 > dex.length) {
+                    r.skipped++;
+                    continue;
+                }
+                int insnsSize = (dex[codeOff + 12] & 0xFF) | ((dex[codeOff + 13] & 0xFF) << 8)
+                        | ((dex[codeOff + 14] & 0xFF) << 16) | ((dex[codeOff + 15] & 0xFF) << 24);
+                if (insnsSize < 0 || insnsSize > MAX_METHOD_UNITS) {
+                    r.skipped++;
+                    continue;
+                }
+                IrBuilder.MethodIr ir = IrBuilder.buildMethod(dex, codeOff);
+                if (ir == null || ir.error != null) {
+                    r.skipped++;
+                    continue;
+                }
+                r.irs.put(en.getKey(), ir);
+                r.flowDex.put(en.getKey(), tag);
+                for (IrBuilder.Insn in : ir.insns) {
+                    if (in == null) continue;
+                    int op = in.op & 0xFF;
+                    if ((op == 0x1A || op == 0x1B) && wantStr.size() < MAX_POOL_STRINGS) {
+                        wantStr.add(in.refIdx);
+                    }
+                }
+            }
+            if (table != null) {
+                for (int idx : wantStr) {
+                    if (r.strings.size() >= MAX_POOL_STRINGS) {
+                        r.truncated = true;
+                        break;
+                    }
+                    String v = table.get(idx);
+                    if (v != null && !v.isEmpty() && !"?".equals(v)) {
+                        if (v.length() > MAX_STRING_LEN) v = v.substring(0, MAX_STRING_LEN);
+                        r.strings.put(tag + "\u0000" + idx, v);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            r.truncated = true;
+        }
+        return r;
+    }
+
+    /**
      * Recolecta IRs de métodos propios (pkgSlash null = todos), hasta
      * budget métodos. budget &lt;= 0 → vacío. Nunca null ni lanza.
      */

@@ -118,59 +118,72 @@ public final class AxmlDecoder {
 
     /** Decodifica un chunk ResStringPool situado en chunkPos. Reutilizable para ARSC. */
     public static List<String> parseStringPool(byte[] buf, int chunkPos) {
-        List<String> out = new ArrayList<>();
+        PoolHead h = parseStringPoolHead(buf, chunkPos, Integer.MAX_VALUE);
+        return h.head;
+    }
+
+    /** Conteo + cabecera de un pool (sin decodificarlo entero). Nunca lanza. */
+    public static class PoolHead {
+        public int count;
+        public List<String> head = new ArrayList<>();
+    }
+
+    /**
+     * Lee el conteo del pool y decodifica como mucho maxKeep primeros
+     * strings. Para pools gigantes (ARSC) evita retenerlos todos.
+     * Nunca null ni lanza.
+     */
+    public static PoolHead parseStringPoolHead(byte[] buf, int chunkPos, int maxKeep) {
+        PoolHead h = new PoolHead();
         try {
             check(buf, chunkPos, 28);
-            if (u16(buf, chunkPos) != STRING_POOL) return out;
+            if (u16(buf, chunkPos) != STRING_POOL) return h;
             int stringCount = u32(buf, chunkPos + 8);
             int flags = u32(buf, chunkPos + 16);
             int stringsStart = u32(buf, chunkPos + 20);
             boolean utf8 = (flags & UTF8_FLAG) != 0;
             int offsetsBase = chunkPos + 28;
             int stringsBase = chunkPos + stringsStart;
-            if (stringCount < 0 || stringCount > 1000000) return out;
-            for (int i = 0; i < stringCount; i++) {
+            if (stringCount < 0 || stringCount > 1000000) return h;
+            h.count = stringCount;
+            int keep = Math.max(0, Math.min(stringCount, maxKeep));
+            for (int i = 0; i < keep; i++) {
                 int offPos = offsetsBase + i * 4;
                 if (offPos + 4 > buf.length) break;
                 int p = stringsBase + u32(buf, offPos);
-                if (p < 0 || p >= buf.length) {
-                    out.add("");
-                    continue;
-                }
-                try {
-                    if (utf8) {
-                        int[] r1 = readUleb128(buf, p);
-                        int[] r2 = readUleb128(buf, r1[1]);
-                        int len = r2[0];
-                        int start = r2[1];
-                        if (len < 0 || start + len > buf.length) {
-                            out.add("");
-                            continue;
-                        }
-                        out.add(new String(buf, start, len, StandardCharsets.UTF_8));
-                    } else {
-                        check(buf, p, 2);
-                        int len = u16(buf, p);
-                        int start = p + 2;
-                        if ((len & 0x8000) != 0) {
-                            check(buf, p, 4);
-                            len = ((len & 0x7FFF) << 16) | u16(buf, p + 2);
-                            start = p + 4;
-                        }
-                        if (len < 0 || start + len * 2 > buf.length) {
-                            out.add("");
-                            continue;
-                        }
-                        out.add(new String(buf, start, len * 2, StandardCharsets.UTF_16LE));
-                    }
-                } catch (RuntimeException e) {
-                    out.add("");
-                }
+                h.head.add(decodePoolEntry(buf, p, utf8));
             }
         } catch (RuntimeException e) {
             // devuelve lo acumulado
         }
-        return out;
+        return h;
+    }
+
+    /** Una entrada del pool ("" si anómala). Nunca null ni lanza. */
+    private static String decodePoolEntry(byte[] buf, int p, boolean utf8) {
+        try {
+            if (p < 0 || p >= buf.length) return "";
+            if (utf8) {
+                int[] r1 = readUleb128(buf, p);
+                int[] r2 = readUleb128(buf, r1[1]);
+                int len = r2[0];
+                int start = r2[1];
+                if (len < 0 || start + len > buf.length) return "";
+                return new String(buf, start, len, StandardCharsets.UTF_8);
+            }
+            check(buf, p, 2);
+            int len = u16(buf, p);
+            int start = p + 2;
+            if ((len & 0x8000) != 0) {
+                check(buf, p, 4);
+                len = ((len & 0x7FFF) << 16) | u16(buf, p + 2);
+                start = p + 4;
+            }
+            if (len < 0 || start + len * 2 > buf.length) return "";
+            return new String(buf, start, len * 2, StandardCharsets.UTF_16LE);
+        } catch (RuntimeException e) {
+            return "";
+        }
     }
 
     /** Lee un uleb128. Devuelve {valor, siguientePos}. */

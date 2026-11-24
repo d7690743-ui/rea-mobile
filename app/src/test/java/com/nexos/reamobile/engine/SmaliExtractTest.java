@@ -155,6 +155,26 @@ public class SmaliExtractTest {
         assertNull(SmaliDumper.dumpSingleClass(dexes, "Lno/Existe;"));
     }
 
+    @Test
+    public void streamDumpEquivale() {
+        List<byte[]> dexes = new ArrayList<>();
+        dexes.add(buildTestDex());
+        SmaliDumper.DumpResult a = SmaliDumper.dumpAll(dexes, "com/x/");
+        SmaliDumper.StreamDump sd = new SmaliDumper.StreamDump("com/x/");
+        for (byte[] d : dexes) sd.addDex(d);
+        assertEquals(null, sd.altPrefix());
+        assertEquals(a.classes.size(), sd.r.classes.size());
+        for (int i = 0; i < a.classes.size(); i++) {
+            assertEquals(a.classes.get(i).path, sd.r.classes.get(i).path);
+            assertEquals(a.classes.get(i).text, sd.r.classes.get(i).text);
+        }
+        assertEquals(a.classSummaries, sd.r.classSummaries);
+        assertEquals(a.truncated, sd.r.truncated);
+        sd.addDex(null);
+        sd.addDex(new byte[10]);
+        assertTrue(sd.r.notes.size() >= 1);
+    }
+
     static void put(ZipOutputStream zos, String name, byte[] data) throws Exception {
         zos.putNextEntry(new ZipEntry(name));
         zos.write(data);

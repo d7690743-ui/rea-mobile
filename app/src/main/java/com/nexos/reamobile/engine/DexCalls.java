@@ -7,7 +7,8 @@ import java.util.Map;
 
 /**
  * Grafo de llamadas lite: aristas clasePropia→métodoInvocado recorriendo los
- * code_item del DEX. Reutiliza la tabla de opcodes de SmaliDumper.
+ * code_item del DEX. Reutiliza la tabla de opcodes de SmaliDumper y las
+ * tablas perezosas DexStrings/DexTypes (sin arrays completos).
  * Java puro. Nunca lanza.
  */
 public final class DexCalls {
@@ -18,6 +19,7 @@ public final class DexCalls {
     public static final int MAX_UNITS = 6000;
     public static final int MAX_EDGES = 20000;
     public static final int MAX_STRINGREFS = 20000;
+    public static final int MAX_CODEOFFS = 4000;
 
     public static class Edge {
         public String caller = "?";
@@ -36,10 +38,20 @@ public final class DexCalls {
 
     public static class Result {
         public List<Edge> edges = new ArrayList<>();
+        /** Aristas de clases ajenas (solo pase fusionado). */
+        public List<Edge> libEdges = new ArrayList<>();
         public List<StringRef> strings = new ArrayList<>();
+        /** Strings de clases ajenas (se fusionan tras las propias). */
+        public List<StringRef> libStrings = new ArrayList<>();
         public Map<String, String> supers = new LinkedHashMap<>();
+        /** Métodos propios con código ("Lcls;->m" → codeOff), para FlowScan. */
+        public Map<String, Integer> codeOffs = new LinkedHashMap<>();
+        /** Tabla de strings usada (se comparte con FlowScan). */
+        public DexStrings table;
         public boolean truncated;
+        public boolean libTruncated;
         public boolean stringsTruncated;
+        public boolean libStringsTruncated;
     }
 
     /**
@@ -47,7 +59,7 @@ public final class DexCalls {
      * Nunca lanza: ante cualquier anomalía devuelve lo acumulado.
      */
     public static Result collect(byte[] dex, String pkgSlash) {
-        return collect(dex, pkgSlash, "?");
+        return collect(dex, pkgSlash, "?", false);
     }
 
     /**
@@ -55,6 +67,17 @@ public final class DexCalls {
      * "classes2.dex"). Usada por ReaEngine para el RefGraph. Nunca lanza.
      */
     public static Result collect(byte[] dex, String pkgSlash, String dexName) {
+        return collect(dex, pkgSlash, dexName, false);
+    }
+
+    /**
+     * Variante fusionada: un solo recorrido del DEX. Si includeLib es true,
+     * las clases fuera de pkgSlash también aportan aristas (a libEdges) y
+     * strings; si es false se omiten como antes. Los presupuestos de
+     * propias y ajenas son independientes: la cobertura propia es idéntica
+     * a la del pase clásico. Nunca lanza.
+     */
+    public static Result collect(byte[] dex, String pkgSlash, String dexName, boolean includeLib) {
         Result r = new Result();
         String tag = dexName == null ? "?" : dexName;
         try {
@@ -71,23 +94,9 @@ public final class DexCalls {
             if (stringN < 0 || stringN > 2000000 || typeN < 0 || typeN > 1000000
                     || methodN < 0 || methodN > 1000000 || classN < 0 || classN > 500000) return r;
 
-            String[] strings = new String[stringN];
-            for (int i = 0; i < stringN; i++) {
-                int idPos = stringOff + i * 4;
-                if (idPos + 4 > dex.length) break;
-                try {
-                    int[] rr = AxmlDecoder.readUleb128(dex, u32(dex, idPos));
-                    strings[i] = DexParser.decodeMutf8(dex, rr[1]);
-                } catch (RuntimeException e) {
-                    strings[i] = "";
-                }
-            }
-            String[] types = new String[typeN];
-            for (int i = 0; i < typeN; i++) {
-                int idPos = typeOff + i * 4;
-                if (idPos + 4 > dex.length) break;
-                types[i] = get(strings, u32(dex, idPos));
-            }
+            DexStrings strings = DexStrings.of(dex, stringOff, stringN);
+            DexTypes types = DexTypes.of(dex, typeOff, typeN, strings);
+            r.table = strings;
             int[] mClass = new int[methodN];
             int[] mName = new int[methodN];
             for (int i = 0; i < methodN; i++) {
@@ -97,16 +106,22 @@ public final class DexCalls {
                 mName[i] = u32(dex, q + 4);
             }
 
-            int scanned = 0;
+            int ownScanned = 0;
+            int libScanned = 0;
+            boolean ownDone = false;
+            boolean libDone = !includeLib;
             for (int i = 0; i < classN; i++) {
+                if (ownDone && libDone) break;
                 int p = classOff + i * 32;
                 if (p + 32 > dex.length) break;
-                String cls = typeAt(types, u32(dex, p));
-                String sup = typeAt(types, u32(dex, p + 8));
+                String cls = types.get(u32(dex, p));
+                String sup = types.get(u32(dex, p + 8));
                 if (!"?".equals(cls) && !"?".equals(sup) && !cls.equals(sup)
                         && !"Ljava/lang/Object;".equals(sup)) r.supers.put(cls, sup);
                 int dataOff = u32(dex, p + 24);
-                if (pkgSlash != null && !cls.startsWith("L" + pkgSlash)) continue;
+                boolean own = pkgSlash == null || cls.startsWith("L" + pkgSlash);
+                if (own && ownDone) continue;
+                if (!own && (libDone || !includeLib)) continue;
                 if (dataOff == 0) continue;
                 try {
                     int q = dataOff;
@@ -128,16 +143,69 @@ public final class DexCalls {
                         int[] rr = readMethod(dex, q);
                         mIdx += rr[0];
                         q = rr[3];
-                        scanned += scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName, tag);
-                        if (stop(r, scanned)) return r;
+                        if (own) {
+                            if (ownScanned >= MAX_METHODS_SCAN) {
+                                r.truncated = true;
+                                ownDone = true;
+                                break;
+                            }
+                            scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName,
+                                    tag, true);
+                            ownScanned++;
+                        } else {
+                            if (libScanned >= MAX_METHODS_SCAN) {
+                                r.libTruncated = true;
+                                libDone = true;
+                                break;
+                            }
+                            scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName,
+                                    tag, false);
+                            libScanned++;
+                        }
+                        if (r.edges.size() >= MAX_EDGES) {
+                            r.truncated = true;
+                            ownDone = true;
+                        }
+                        if (r.libEdges.size() >= MAX_EDGES) {
+                            r.libTruncated = true;
+                            libDone = true;
+                        }
+                        if (ownDone && libDone) break;
                     }
+                    if (ownDone && libDone) break;
                     mIdx = 0;
                     for (int k = 0; k < virtualN; k++) {
                         int[] rr = readMethod(dex, q);
                         mIdx += rr[0];
                         q = rr[3];
-                        scanned += scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName, tag);
-                        if (stop(r, scanned)) return r;
+                        if (own) {
+                            if (ownScanned >= MAX_METHODS_SCAN) {
+                                r.truncated = true;
+                                ownDone = true;
+                                break;
+                            }
+                            scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName,
+                                    tag, true);
+                            ownScanned++;
+                        } else {
+                            if (libScanned >= MAX_METHODS_SCAN) {
+                                r.libTruncated = true;
+                                libDone = true;
+                                break;
+                            }
+                            scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName,
+                                    tag, false);
+                            libScanned++;
+                        }
+                        if (r.edges.size() >= MAX_EDGES) {
+                            r.truncated = true;
+                            ownDone = true;
+                        }
+                        if (r.libEdges.size() >= MAX_EDGES) {
+                            r.libTruncated = true;
+                            libDone = true;
+                        }
+                        if (ownDone && libDone) break;
                     }
                 } catch (RuntimeException e) {
                     // clase anómala: sigue con la siguiente
@@ -169,25 +237,21 @@ public final class DexCalls {
         return q;
     }
 
-    private static boolean stop(Result r, int scanned) {
-        if (r.edges.size() >= MAX_EDGES || scanned >= MAX_METHODS_SCAN) {
-            r.truncated = true;
-            return true;
-        }
-        return false;
-    }
-
-    /** Escanea un método; devuelve 1 (método contado) y añade aristas. */
-    private static int scanMethod(byte[] dex, Result r, String cls, int mIdx, int codeOff,
-                                  String[] types, String[] strings, int[] mClass, int[] mName,
-                                  String dexName) {
-        if (codeOff == 0) return 1;
+    /** Escanea un método; añade aristas (own→edges, ajenas→libEdges). */
+    private static void scanMethod(byte[] dex, Result r, String cls, int mIdx, int codeOff,
+                                   DexTypes types, DexStrings strings, int[] mClass, int[] mName,
+                                   String dexName, boolean own) {
+        if (codeOff == 0) return;
         check(dex, codeOff, 16);
         int insnsSize = u32(dex, codeOff + 12);
-        if (insnsSize < 0 || insnsSize > 1000000) return 1;
+        if (insnsSize < 0 || insnsSize > 1000000) return;
         int n = Math.min(insnsSize, MAX_UNITS);
         check(dex, codeOff + 16, n * 2);
-        String caller = cls + "->" + methodName(types, strings, mClass, mName, mIdx);
+        String caller = cls + "->" + methodName(strings, mClass, mName, mIdx);
+        if (own && r.codeOffs.size() < MAX_CODEOFFS && !r.codeOffs.containsKey(caller)) {
+            r.codeOffs.put(caller, codeOff);
+        }
+        List<Edge> dst = own ? r.edges : r.libEdges;
         int p = 0;
         while (p < n) {
             int u0 = u16(dex, codeOff + 16 + p * 2);
@@ -197,39 +261,42 @@ public final class DexCalls {
             if (size <= 0 || p + size > n) break;
             if (SmaliDumper.REFS[op] == SmaliDumper.R_METHOD) {
                 int idx = u16(dex, codeOff + 16 + (p + 1) * 2);
-                if (idx >= 0 && idx < mClass.length && r.edges.size() < MAX_EDGES) {
+                if (idx >= 0 && idx < mClass.length && dst.size() < MAX_EDGES) {
                     Edge e = new Edge();
                     e.caller = caller;
-                    e.callee = typeAt(types, mClass[idx]) + "->" + get(strings, mName[idx]);
+                    e.callee = types.get(mClass[idx]) + "->" + strings.get(mName[idx]);
                     e.dex = dexName;
                     e.pos = p;
-                    r.edges.add(e);
+                    dst.add(e);
                 }
             } else if (SmaliDumper.REFS[op] == SmaliDumper.R_STR) {
                 // const-string/jumbo: el índice es u16 (21c) o u32 (31c).
                 int idx = op == 0x1b
                         ? u32(dex, codeOff + 16 + (p + 1) * 2)
                         : u16(dex, codeOff + 16 + (p + 1) * 2);
-                if (idx >= 0 && idx < strings.length) {
-                    String v = get(strings, idx);
+                if (idx >= 0 && idx < strings.size()) {
+                    String v = strings.get(idx);
                     if (v != null && !v.isEmpty() && !"?".equals(v)) {
-                        if (r.strings.size() < MAX_STRINGREFS) {
+                        List<StringRef> sdst = own ? r.strings : r.libStrings;
+                        if (sdst.size() < MAX_STRINGREFS) {
                             StringRef s = new StringRef();
                             s.user = caller;
                             s.value = v;
                             s.dex = dexName;
                             s.pos = p;
-                            r.strings.add(s);
-                        } else {
+                            sdst.add(s);
+                        } else if (own) {
                             r.stringsTruncated = true;
                             r.truncated = true;
+                        } else {
+                            r.libStringsTruncated = true;
+                            r.libTruncated = true;
                         }
                     }
                 }
             }
             p += size;
         }
-        return 1;
     }
 
     private static int sizeOf(int fmt, byte[] dex, int base, int p, int n) {
@@ -282,19 +349,9 @@ public final class DexCalls {
         return new int[]{diff, a[0], a[0], a[1]};
     }
 
-    private static String methodName(String[] types, String[] strings, int[] mClass, int[] mName, int idx) {
+    private static String methodName(DexStrings strings, int[] mClass, int[] mName, int idx) {
         if (idx < 0 || idx >= mName.length) return "?";
-        return get(strings, mName[idx]);
-    }
-
-    private static String get(String[] arr, int idx) {
-        if (idx < 0 || idx >= arr.length || arr[idx] == null) return "?";
-        return arr[idx];
-    }
-
-    private static String typeAt(String[] types, int idx) {
-        if (idx < 0 || idx >= types.length || types[idx] == null) return "?";
-        return types[idx];
+        return strings.get(mName[idx]);
     }
 
     private static int u16(byte[] b, int p) {

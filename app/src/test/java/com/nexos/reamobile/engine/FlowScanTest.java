@@ -35,6 +35,19 @@ public class FlowScanTest {
     }
 
     @Test
+    public void buildFromEquivaleACollect() {
+        byte[] dex = SmaliExtractTest.buildTestDex();
+        DexCalls.Result cr = DexCalls.collect(dex, null, "classes.dex");
+        FlowScan.FlowResult a = FlowScan.collect(dex, null, "classes.dex", 400);
+        FlowScan.FlowResult b = FlowScan.buildFrom(dex, cr.codeOffs, cr.table, "classes.dex", 400);
+        assertEquals(a.irs.keySet(), b.irs.keySet());
+        assertEquals(a.strings, b.strings);
+        assertEquals(a.flowDex, b.flowDex);
+        assertTrue(FlowScan.buildFrom(null, null, null, "x", 10).irs.isEmpty());
+        assertTrue(FlowScan.buildFrom(dex, null, null, "x", 10).irs.isEmpty());
+    }
+
+    @Test
     public void basuraNoLanza() {
         assertTrue(FlowScan.collect(null, null, null, 10).irs.isEmpty());
         assertTrue(FlowScan.collect(new byte[10], null, "x", 10).irs.isEmpty());

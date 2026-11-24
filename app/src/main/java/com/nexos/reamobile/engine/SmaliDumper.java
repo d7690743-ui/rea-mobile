@@ -139,8 +139,8 @@ public final class SmaliDumper {
 
     static class Tables {
         byte[] buf;
-        String[] strings;
-        String[] types;
+        DexStrings strings;
+        DexTypes types;
         int[] mClass, mProto, mName;
         int[] fClass, fType, fName;
         int protoOff, protoSize;
@@ -160,41 +160,80 @@ public final class SmaliDumper {
         public boolean truncated;
     }
 
-    /** Desensambla las clases bajo pkgSlash (p.ej. "com/nexos/app/") de todos los dex. */
-    public static DumpResult dumpAll(List<byte[]> dexes, String pkgSlash) {
-        DumpResult r = new DumpResult();
-        Map<String, Integer> prefixCount = new LinkedHashMap<>();
-        for (byte[] dex : dexes) {
+    /**
+     * Volcado incremental dex por dex: el llamador aporta cada dex y libera
+     * sus bytes tras volcarlo, sin retenerlos todos. Misma semántica por dex
+     * que dumpAll; el reintento con prefijo alternativo lo decide el llamador
+     * con altPrefix(). Nunca lanza (los dex malos quedan en notas).
+     */
+    public static class StreamDump {
+        public final DumpResult r = new DumpResult();
+        private final Map<String, Integer> prefixCount = new LinkedHashMap<>();
+        private final String filterSlash;
+
+        public StreamDump(String filterSlash) {
+            this.filterSlash = filterSlash == null ? "" : filterSlash;
+        }
+
+        /** Vuelca un dex (null-seguro). Nunca lanza. */
+        public void addDex(byte[] dex) {
             try {
-                dumpOne(dex, pkgSlash, r, prefixCount);
+                if (dex == null) return;
+                dumpOne(dex, filterSlash, r, prefixCount);
             } catch (RuntimeException e) {
                 r.notes.add("dex omitido: " + e.getMessage());
             }
-            if (r.truncated) break;
         }
-        for (Map.Entry<String, Integer> e : prefixCount.entrySet()) {
-            if (r.appPrefixes.size() >= 10) break;
-            if (!isFrameworkPrefix(e.getKey())) r.appPrefixes.add(e.getKey());
-        }
-        if (r.classes.isEmpty() && !r.appPrefixes.isEmpty() && !r.appPrefixes.get(0).equals(pkgSlash)) {
-            String alt = r.appPrefixes.get(0);
-            r.notes.add("sin clases bajo " + pkgSlash + "; reintento con " + alt);
-            DumpResult r2 = new DumpResult();
-            for (byte[] dex : dexes) {
-                try {
-                    dumpOne(dex, alt, r2, new LinkedHashMap<String, Integer>());
-                } catch (RuntimeException e) {
-                    r2.notes.add("dex omitido: " + e.getMessage());
+
+        /**
+         * Prefijo alternativo si no hubo clases bajo el filtro (o null).
+         * Rellena r.appPrefixes como dumpAll. Nunca null-riesgoso ni lanza.
+         */
+        public String altPrefix() {
+            try {
+                List<String> prefs = new ArrayList<>();
+                for (Map.Entry<String, Integer> e : prefixCount.entrySet()) {
+                    if (prefs.size() >= 10) break;
+                    if (!isFrameworkPrefix(e.getKey())) prefs.add(e.getKey());
                 }
-                if (r2.truncated) break;
+                r.appPrefixes.clear();
+                r.appPrefixes.addAll(prefs);
+                if (r.classes.isEmpty() && !prefs.isEmpty()
+                        && !prefs.get(0).equals(filterSlash)) {
+                    return prefs.get(0);
+                }
+            } catch (Throwable ignored) {
             }
-            r.classes = r2.classes;
-            r.classSummaries = r2.classSummaries;
-            r.bytes = r2.bytes;
-            r.truncated = r2.truncated;
-            r.notes.addAll(r2.notes);
+            return null;
         }
-        return r;
+    }
+
+    /** Desensambla las clases bajo pkgSlash (p.ej. "com/nexos/app/") de todos los dex. */
+    public static DumpResult dumpAll(List<byte[]> dexes, String pkgSlash) {
+        StreamDump sd = new StreamDump(pkgSlash);
+        if (dexes != null) {
+            for (byte[] dex : dexes) {
+                sd.addDex(dex);
+                if (sd.r.truncated) break;
+            }
+        }
+        String alt = sd.altPrefix();
+        if (alt != null) {
+            sd.r.notes.add("sin clases bajo " + pkgSlash + "; reintento con " + alt);
+            StreamDump sd2 = new StreamDump(alt);
+            if (dexes != null) {
+                for (byte[] dex : dexes) {
+                    sd2.addDex(dex);
+                    if (sd2.r.truncated) break;
+                }
+            }
+            sd.r.classes = sd2.r.classes;
+            sd.r.classSummaries = sd2.r.classSummaries;
+            sd.r.bytes = sd2.r.bytes;
+            sd.r.truncated = sd2.r.truncated;
+            sd.r.notes.addAll(sd2.r.notes);
+        }
+        return sd.r;
     }
 
     /** Desensambla una sola clase (descriptor estilo "Lcom/x/A;") o null. */
@@ -277,23 +316,8 @@ public final class SmaliDumper {
                 || methodN < 0 || methodN > 1000000 || fieldN < 0 || fieldN > 1000000) {
             throw new IllegalArgumentException("cabecera dex inválida");
         }
-        t.strings = new String[stringN];
-        for (int i = 0; i < stringN; i++) {
-            int idPos = stringOff + i * 4;
-            if (idPos + 4 > buf.length) break;
-            try {
-                int[] rr = AxmlDecoder.readUleb128(buf, u32(buf, idPos));
-                t.strings[i] = DexParser.decodeMutf8(buf, rr[1]);
-            } catch (RuntimeException e) {
-                t.strings[i] = "";
-            }
-        }
-        t.types = new String[typeN];
-        for (int i = 0; i < typeN; i++) {
-            int idPos = typeOff + i * 4;
-            if (idPos + 4 > buf.length) break;
-            t.types[i] = get(t.strings, u32(buf, idPos));
-        }
+        t.strings = DexStrings.of(buf, stringOff, stringN);
+        t.types = DexTypes.of(buf, typeOff, typeN, t.strings);
         t.mClass = new int[methodN];
         t.mProto = new int[methodN];
         t.mName = new int[methodN];
@@ -323,7 +347,7 @@ public final class SmaliDumper {
         sb.append(".class ").append(accessStr(access, 0)).append(cls).append('\n');
         String sup = (superIdx == 0xFFFFFFFF || superIdx < 0) ? "Ljava/lang/Object;" : typeAt(t, superIdx);
         sb.append(".super ").append(sup).append('\n');
-        String src = (srcIdx == 0xFFFFFFFF) ? "" : get(t.strings, srcIdx);
+        String src = (srcIdx == 0xFFFFFFFF) ? "" : t.strings.get(srcIdx);
         if (!src.isEmpty() && !src.equals("?")) sb.append(".source \"").append(escape(src)).append("\"\n");
         sb.append('\n');
         int methods = 0;
@@ -411,7 +435,7 @@ public final class SmaliDumper {
         String proto = "()?";
         if (mIdx >= 0 && mIdx < t.mClass.length) {
             cls = typeAt(t, t.mClass[mIdx]);
-            name = get(t.strings, t.mName[mIdx]);
+            name = t.strings.get(t.mName[mIdx]);
             proto = protoString(t, t.mProto[mIdx]);
         }
         sb.append(".method ").append(accessStr(acc, 1)).append(name).append(proto).append('\n');
@@ -720,7 +744,7 @@ public final class SmaliDumper {
     private static String ref(Tables t, int kind, int idx) {
         switch (kind) {
             case R_STR: {
-                String s = get(t.strings, idx);
+                String s = t.strings.get(idx);
                 return s.equals("?") ? "#str@0x" + Integer.toHexString(idx) : "\"" + escape(s) + "\"";
             }
             case R_TYPE: {
@@ -740,11 +764,11 @@ public final class SmaliDumper {
         try {
             if (field) {
                 if (idx < 0 || idx >= t.fClass.length) return "#campo@0x" + Integer.toHexString(idx);
-                return typeAt(t, t.fClass[idx]) + "->" + get(t.strings, t.fName[idx])
+                return typeAt(t, t.fClass[idx]) + "->" + t.strings.get(t.fName[idx])
                         + ":" + typeAt(t, t.fType[idx]);
             }
             if (idx < 0 || idx >= t.mClass.length) return "#metodo@0x" + Integer.toHexString(idx);
-            return typeAt(t, t.mClass[idx]) + "->" + get(t.strings, t.mName[idx])
+            return typeAt(t, t.mClass[idx]) + "->" + t.strings.get(t.mName[idx])
                     + protoString(t, t.mProto[idx]);
         } catch (RuntimeException e) {
             return "#ref@0x" + Integer.toHexString(idx);
@@ -754,7 +778,7 @@ public final class SmaliDumper {
     private static String fieldName(Tables t, int idx) {
         try {
             if (idx < 0 || idx >= t.fClass.length) return "campo#0x" + Integer.toHexString(idx);
-            return get(t.strings, t.fName[idx]) + ":" + typeAt(t, t.fType[idx]);
+            return t.strings.get(t.fName[idx]) + ":" + typeAt(t, t.fType[idx]);
         } catch (RuntimeException e) {
             return "campo#0x" + Integer.toHexString(idx);
         }
@@ -884,14 +908,13 @@ public final class SmaliDumper {
         return sb.toString();
     }
 
-    private static String get(String[] arr, int idx) {
-        if (idx < 0 || idx >= arr.length || arr[idx] == null) return "?";
-        return arr[idx];
-    }
-
     private static String typeAt(Tables t, int idx) {
-        if (idx < 0 || idx >= t.types.length || t.types[idx] == null) return "?";
-        return t.types[idx];
+        try {
+            if (t == null || t.types == null) return "?";
+            return t.types.get(idx);
+        } catch (Throwable ignored) {
+            return "?";
+        }
     }
 
     private static int u16(byte[] b, int p) {

@@ -38,10 +38,10 @@ public final class ArscStrings {
                 info.error = "arsc sin pool global";
                 return info;
             }
-            List<String> all = AxmlDecoder.parseStringPool(buf, 12);
-            info.stringCount = all.size();
-            for (int i = 0; i < all.size() && i < MAX_STRINGS; i++) info.strings.add(all.get(i));
-            info.truncated = all.size() > MAX_STRINGS;
+            AxmlDecoder.PoolHead pool = AxmlDecoder.parseStringPoolHead(buf, 12, MAX_STRINGS);
+            info.stringCount = pool.count;
+            info.strings.addAll(pool.head);
+            info.truncated = pool.count > MAX_STRINGS;
         } catch (RuntimeException e) {
             info.error = "error decodificando arsc";
         }

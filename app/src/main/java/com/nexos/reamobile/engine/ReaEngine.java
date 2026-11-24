@@ -1039,7 +1039,7 @@ public final class ReaEngine {
                                 String dexName) {
         try {
             if (r == null || usedPermSet == null) return;
-            DexCalls.Result cr = DexCalls.collect(dexBytes, pkgSlash, dexName);
+            DexCalls.Result cr = DexCalls.collect(dexBytes, pkgSlash, dexName, pkgSlash != null);
             r.superMap.putAll(cr.supers);
             r.graph.addAll(cr.edges);
             r.stringRefs.addAll(cr.strings);
@@ -1056,16 +1056,13 @@ public final class ReaEngine {
             }
             if (cr.truncated) r.dexNotes.add("llamadas: topes alcanzados (muestra parcial)");
             if (cr.stringsTruncated) noteOnce(r, "cadenas: topes alcanzados (muestra parcial)");
-            collectFlow(r, dexBytes, pkgSlash, dexName);
-            // Segunda pasada: sensibles invocadas desde librerías (adrt…) al grafo.
+            collectFlow(r, dexBytes, cr, dexName);
+            // Sensibles invocadas desde librerías (adrt…) al grafo.
             // suspCalls queda propio (su sección lo afirma); el grafo es más amplio.
             if (pkgSlash != null) {
-                DexCalls.Result lib = DexCalls.collect(dexBytes, null, dexName);
-                r.superMap.putAll(lib.supers);
                 List<DexCalls.Edge> keep = new ArrayList<>();
-                for (DexCalls.Edge e : lib.edges) {
+                for (DexCalls.Edge e : cr.libEdges) {
                     if (e == null || e.caller == null || e.callee == null) continue;
-                    if (e.caller.startsWith("L" + pkgSlash)) continue;
                     int arrow = e.callee.indexOf("->");
                     String cls = arrow < 0 ? e.callee : e.callee.substring(0, arrow);
                     String name = arrow < 0 ? "" : e.callee.substring(arrow + 2);
@@ -1073,20 +1070,22 @@ public final class ReaEngine {
                     keep.add(e);
                 }
                 r.graph.addAll(keep);
-                r.stringRefs.addAll(lib.strings);
+                r.stringRefs.addAll(cr.libStrings);
                 String tag = dexName == null ? "?" : dexName;
-                if (lib.truncated) r.dexNotes.add("librerías " + tag + ": muestra parcial (topes)");
-                if (lib.stringsTruncated) noteOnce(r, "cadenas: topes alcanzados (muestra parcial)");
+                if (cr.libTruncated) r.dexNotes.add("librerías " + tag + ": muestra parcial (topes)");
+                if (cr.libStringsTruncated) {
+                    noteOnce(r, "cadenas: topes alcanzados (muestra parcial)");
+                }
             }
         } catch (Throwable ignored) {
         }
     }
 
     /**
-     * OMEGA flujo: recolecta IRs de métodos propios para def-use, constantes
-     * y taint (tope global FlowScan.MAX_FLOW_METHODS). Nunca lanza.
+     * OMEGA flujo: construye IRs sobre los métodos que DexCalls ya recorrió
+     * (sin re-recorrer el DEX ni re-decodificar strings). Nunca lanza.
      */
-    static void collectFlow(ApkReport r, byte[] dexBytes, String pkgSlash, String dexName) {
+    static void collectFlow(ApkReport r, byte[] dexBytes, DexCalls.Result cr, String dexName) {
         try {
             if (r == null) return;
             int budget = FlowScan.MAX_FLOW_METHODS - r.flowIrs.size();
@@ -1094,7 +1093,9 @@ public final class ReaEngine {
                 r.flowTruncated = true;
                 return;
             }
-            FlowScan.FlowResult fr = FlowScan.collect(dexBytes, pkgSlash, dexName, budget);
+            FlowScan.FlowResult fr = FlowScan.buildFrom(dexBytes,
+                    cr == null ? null : cr.codeOffs, cr == null ? null : cr.table,
+                    dexName, budget);
             for (Map.Entry<String, IrBuilder.MethodIr> en : fr.irs.entrySet()) {
                 if (en.getKey() == null || en.getValue() == null) continue;
                 if (r.flowIrs.containsKey(en.getKey())) continue;
@@ -1318,7 +1319,9 @@ public final class ReaEngine {
                     ZipEntry e = en0.nextElement();
                     if (!e.isDirectory() && e.getName().matches("classes\\d*\\.dex")) dexNames.add(e.getName());
                 }
-                List<byte[]> dexBytes = new ArrayList<>();
+                // Streaming por dex: volcar y soltar bytes (sin retener todos).
+                SmaliDumper.StreamDump smaliDump = new SmaliDumper.StreamDump(pkgSlash);
+                List<String> dexStrings = new ArrayList<>();
                 for (String dn : dexNames) {
                     ZipEntry e = zip.getEntry(dn);
                     byte[] b = e == null ? null : readEntry(zip, e, MAX_DEX_BYTES);
@@ -1326,9 +1329,35 @@ public final class ReaEngine {
                         r.notes.add(dn + ": omitido por tamaño");
                         continue;
                     }
-                    dexBytes.add(b);
+                    if (!smaliDump.r.truncated) smaliDump.addDex(b);
+                    DexParser.DexInfo di = DexParser.parse(b, "dex");
+                    if (di.error == null) {
+                        for (String s : di.strings) {
+                            if (dexStrings.size() >= MAX_STRING_LINES) break;
+                            dexStrings.add(s);
+                        }
+                    }
+                    b = null;
                 }
-                SmaliDumper.DumpResult smali = SmaliDumper.dumpAll(dexBytes, pkgSlash);
+                SmaliDumper.DumpResult smali = smaliDump.r;
+                String alt = smaliDump.altPrefix();
+                if (alt != null) {
+                    smali.notes.add("sin clases bajo " + pkgSlash + "; reintento con " + alt);
+                    SmaliDumper.StreamDump sd2 = new SmaliDumper.StreamDump(alt);
+                    for (String dn : dexNames) {
+                        ZipEntry e = zip.getEntry(dn);
+                        byte[] b = e == null ? null : readEntry(zip, e, MAX_DEX_BYTES);
+                        if (b == null) continue;
+                        sd2.addDex(b);
+                        b = null;
+                        if (sd2.r.truncated) break;
+                    }
+                    smali.classes = sd2.r.classes;
+                    smali.classSummaries = sd2.r.classSummaries;
+                    smali.bytes = sd2.r.bytes;
+                    smali.truncated = sd2.r.truncated;
+                    smali.notes.addAll(sd2.r.notes);
+                }
                 r.smaliClasses = smali.classes.size();
                 r.notes.addAll(smali.notes);
                 if (smali.truncated) r.notes.add("smali: recortado por topes");
@@ -1343,16 +1372,6 @@ public final class ReaEngine {
                                 || sc.text.contains("getLaunchIntentForPackage"))) {
                             r.notes.add("autoarranque: " + fq + " lanza actividad (smali)");
                             break;
-                        }
-                    }
-                }
-                List<String> dexStrings = new ArrayList<>();
-                for (byte[] b : dexBytes) {
-                    DexParser.DexInfo di = DexParser.parse(b, "dex");
-                    if (di.error == null) {
-                        for (String s : di.strings) {
-                            if (dexStrings.size() >= MAX_STRING_LINES) break;
-                            dexStrings.add(s);
                         }
                     }
                 }
@@ -1408,6 +1427,9 @@ public final class ReaEngine {
                         zos.write(sc.text.getBytes("UTF-8"));
                         zos.closeEntry();
                     }
+                    // Libera smali ya volcado antes de JADX (hasta 40MB).
+                    smali.classes.clear();
+                    smali.classSummaries.clear();
                     StringBuilder ds = new StringBuilder();
                     for (String s : dexStrings) ds.append(s.replace('\n', ' ')).append('\n');
                     putText(zos, "rea/INDICIOS_strings_dex.txt", ds.toString());
@@ -1416,8 +1438,7 @@ public final class ReaEngine {
                     putText(zos, "rea/INDICIOS_strings_arsc.txt", as.toString());
                     List<String> slashes = new ArrayList<>();
                     if (!"?".equals(pkg)) slashes.add(pkgSlash);
-                    // Libera dex/strings ya volcados antes de cargar JADX.
-                    dexBytes.clear();
+                    // Libera strings ya volcados antes de cargar JADX.
                     dexStrings.clear();
                     arscStrings.clear();
                     System.gc();
