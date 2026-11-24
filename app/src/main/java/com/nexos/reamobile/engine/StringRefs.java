@@ -127,6 +127,90 @@ public final class StringRefs {
         return out;
     }
 
+    /**
+     * Variante con tope y salida temprana (PHANTOM). Nunca lanza.
+     */
+    public List<String> usersOfContaining(String sub, int cap) {
+        List<String> out = new ArrayList<>();
+        try {
+            if (sub == null || sub.isEmpty()) return out;
+            int lim = cap <= 0 ? 25 : Math.min(cap, 500);
+            Set<String> seen = new LinkedHashSet<>();
+            for (Map.Entry<String, Set<String>> e : users.entrySet()) {
+                if (out.size() >= lim) break;
+                String key = e.getKey();
+                if (key == null || key.length() < sub.length()) continue;
+                if (!key.contains(sub)) continue;
+                if (e.getValue() == null) continue;
+                for (String u : e.getValue()) {
+                    if (u != null && seen.add(u)) out.add(u);
+                    if (out.size() >= lim) break;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
+    /**
+     * Literales que carga un método (índice inverso acotado para PHANTOM).
+     * Recorre el mapa una vez; tope cap. Nunca lanza.
+     */
+    public List<String> literalsOf(String method, int cap) {
+        List<String> out = new ArrayList<>();
+        try {
+            if (method == null || method.isEmpty()) return out;
+            int lim = cap <= 0 ? 50 : Math.min(cap, 500);
+            for (Map.Entry<String, Set<String>> e : users.entrySet()) {
+                if (out.size() >= lim) break;
+                if (e.getKey() == null || e.getValue() == null) continue;
+                if (e.getValue().contains(method)) out.add(e.getKey());
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
+    /** Un literal y sus métodos usuario (para barridos PHANTOM). Nunca lanza. */
+    public static class LitHit {
+        public String value = "";
+        public List<String> users = new ArrayList<>();
+    }
+
+    /**
+     * Barrido acotado: literales que contienen alguna aguja (p. ej. "SELECT",
+     * ".db"). Una pasada; tope cap pares. Nunca lanza.
+     */
+    public List<LitHit> scanContains(String[] needles, int cap) {
+        List<LitHit> out = new ArrayList<>();
+        try {
+            if (needles == null || needles.length == 0) return out;
+            int lim = cap <= 0 ? 50 : Math.min(cap, 500);
+            for (Map.Entry<String, Set<String>> e : users.entrySet()) {
+                if (out.size() >= lim) break;
+                String key = e.getKey();
+                if (key == null || key.isEmpty() || e.getValue() == null) continue;
+                boolean hit = false;
+                for (String n : needles) {
+                    if (n != null && !n.isEmpty() && key.contains(n)) {
+                        hit = true;
+                        break;
+                    }
+                }
+                if (!hit) continue;
+                LitHit h = new LitHit();
+                h.value = key;
+                for (String u : e.getValue()) {
+                    if (u != null) h.users.add(u);
+                    if (h.users.size() >= 5) break;
+                }
+                out.add(h);
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
     public int valueCount() {
         return users.size();
     }

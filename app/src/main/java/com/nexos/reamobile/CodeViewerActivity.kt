@@ -22,6 +22,7 @@ import android.widget.TextView
 import com.nexos.reamobile.engine.FullReport
 import com.nexos.reamobile.engine.JadxAdapter
 import com.nexos.reamobile.engine.JavaHarvest
+import com.nexos.reamobile.engine.PhantomDecompile
 import com.nexos.reamobile.engine.ReaEngine
 import com.nexos.reamobile.engine.SmaliDumper
 import java.io.ByteArrayOutputStream
@@ -433,6 +434,17 @@ class CodeViewerActivity : Activity() {
                 } catch (t: Throwable) {
                     256L * 1024 * 1024
                 }
+                // PHANTOM: prioridad dirigida (entradas+pantallas+grupos); si falla,
+                // lista vacía = orden de carga de siempre.
+                val prio: List<String> = try {
+                    val rep = ReaEngine.analyze(apk)
+                    val p = PhantomDecompile.priority(rep,
+                        JadxAdapter.recommendedCap(heap))
+                    System.gc()
+                    p
+                } catch (t: Throwable) {
+                    emptyList()
+                }
                 res = JadxAdapter.decompileFiltered(apk, cacheDir,
                     JadxAdapter.recommendedThreads(heap), prefixes,
                     JadxAdapter.recommendedCap(heap),
@@ -447,7 +459,7 @@ class CodeViewerActivity : Activity() {
                             Session.jadxProgressMsg = "JADX $name…"
                             runOnUiThread { updateStatus("JADX $name…") }
                         }
-                    })
+                    }, prio)
                 if (res.error == null) {
                     Session.jadxCache.putAll(res.sources)
                     Session.jadxErrors = res.errors
@@ -652,11 +664,14 @@ class CodeViewerActivity : Activity() {
                 val snap = LinkedHashMap(Session.jadxCache)
                 val extras = FullReport.Extras()
                 extras.build = buildId()
-                // Informe estático (firma, manifest, hallazgos) al inicio del TXT.
-                extras.staticReport = try {
-                    ReaEngine.analyze(apk).toText()
+                // Informe estático + paquete JSON (un solo analyze, PHANTOM incluido).
+                try {
+                    val rep = ReaEngine.analyze(apk)
+                    extras.staticReport = rep.toText()
+                    extras.packageJson = rep.toJson()
                 } catch (t: Throwable) {
-                    ""
+                    extras.staticReport = ""
+                    extras.packageJson = ""
                 }
                 // Smali de respaldo para las clases sin Java.
                 try {

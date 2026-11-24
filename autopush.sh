@@ -95,6 +95,29 @@ git add settings.gradle build.gradle gradle.properties .gitignore \
   docs/ALFA_1_NATIVO.md \
   docs/ALFA_2_UI.md \
   docs/ALFA_3_BLUEPRINT.md \
+  app/src/main/java/com/nexos/reamobile/engine/ArscTable.java \
+  app/src/test/java/com/nexos/reamobile/engine/ArscTableTest.java \
+  docs/RECONSTRUCCION.md \
+  app/src/main/java/com/nexos/reamobile/engine/Phantom.java \
+  app/src/main/java/com/nexos/reamobile/engine/PhantomGroup.java \
+  app/src/main/java/com/nexos/reamobile/engine/PhantomMetric.java \
+  app/src/main/java/com/nexos/reamobile/engine/PhantomNet.java \
+  app/src/main/java/com/nexos/reamobile/engine/PhantomUi.java \
+  app/src/main/java/com/nexos/reamobile/engine/PhantomStore.java \
+  app/src/main/java/com/nexos/reamobile/engine/PhantomData.java \
+  app/src/main/java/com/nexos/reamobile/engine/PhantomJni.java \
+  app/src/main/java/com/nexos/reamobile/engine/PhantomTaint.java \
+  app/src/main/java/com/nexos/reamobile/engine/PhantomDecompile.java \
+  app/src/test/java/com/nexos/reamobile/engine/PhantomJniTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/PhantomNetTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/PhantomUiTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/PhantomStoreTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/PhantomDataTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/PhantomGroupTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/PhantomMetricTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/PhantomTaintTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/PhantomPackTest.java \
+  docs/PHANTOM.md \
   autopush.sh \
   app/src/main/java/com/nexos/reamobile/Session.kt \
   app/src/main/java/com/nexos/reamobile/CodeViewerActivity.kt \

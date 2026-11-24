@@ -8,8 +8,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import jadx.api.JadxArgs;
@@ -269,13 +271,33 @@ public final class JadxAdapter {
     public static Result decompileFiltered(File input, File workDir, int threads,
                                            List<String> pkgSlashes, int maxClasses, Progress progress) {
         return decompileFiltered(input, workDir, threads, pkgSlashes, maxClasses,
-                progress, defaultPolicy());
+                progress, null, defaultPolicy());
+    }
+
+    /**
+     * Variante PHANTOM con prioridad: descriptores smali ("Lcom/x/A;") que
+     * salen primero dentro del tope. Null/vacía = orden de carga.
+     * Nunca lanza.
+     */
+    public static Result decompileFiltered(File input, File workDir, int threads,
+                                           List<String> pkgSlashes, int maxClasses, Progress progress,
+                                           List<String> prioritySmali) {
+        return decompileFiltered(input, workDir, threads, pkgSlashes, maxClasses,
+                progress, prioritySmali, defaultPolicy());
     }
 
     /** Variante con política de memoria inyectable (tests). Nunca lanza. */
     public static Result decompileFiltered(File input, File workDir, int threads,
                                            List<String> pkgSlashes, int maxClasses, Progress progress,
                                            MemoryPolicy mem) {
+        return decompileFiltered(input, workDir, threads, pkgSlashes, maxClasses,
+                progress, null, mem);
+    }
+
+    /** Variante completa: memoria + prioridad PHANTOM. Nunca lanza. */
+    public static Result decompileFiltered(File input, File workDir, int threads,
+                                           List<String> pkgSlashes, int maxClasses, Progress progress,
+                                           List<String> prioritySmali, MemoryPolicy mem) {
         Result r = new Result();
         if (input == null || !input.isFile()) {
             r.error = "entrada no válida";
@@ -288,20 +310,71 @@ public final class JadxAdapter {
         try {
             if (isZip(input)) {
                 return decompileZip(input, workDir, threads, pkgSlashes,
-                        maxClasses, progress, mem);
+                        maxClasses, progress, mem, prioritySmali);
             }
             return decompileSingle(input, workDir, threads, pkgSlashes,
-                    maxClasses, progress, mem, input.getName());
+                    maxClasses, progress, mem, input.getName(), prioritySmali);
         } catch (Throwable t) {
             r.error = "jadx: " + fullMsg(t);
             return r;
         }
     }
 
+    /**
+     * Claves dotted de la prioridad (unión de candidateKeys, tope 500).
+     * Nunca null ni lanza.
+     */
+    static Set<String> priorityKeys(List<String> prioritySmali) {
+        Set<String> out = new LinkedHashSet<>();
+        try {
+            if (prioritySmali == null) return out;
+            for (String d : prioritySmali) {
+                if (out.size() >= 1500) break;
+                for (String k : candidateKeys(d)) {
+                    if (k != null) out.add(k);
+                    if (out.size() >= 1500) break;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return out;
+    }
+
+    /**
+     * Ordena las clases: primero la prioridad, luego el resto (mismas
+     * referencias, sin copiar código). Vacía = orden original. Nunca lanza.
+     */
+    private static List<JavaClass> orderedForPriority(List<JavaClass> classes,
+                                                      List<String> prioritySmali) {
+        try {
+            if (classes == null) return new ArrayList<>();
+            if (prioritySmali == null || prioritySmali.isEmpty()) return classes;
+            Set<String> prio = priorityKeys(prioritySmali);
+            if (prio.isEmpty()) return classes;
+            List<JavaClass> first = new ArrayList<>();
+            List<JavaClass> rest = new ArrayList<>();
+            for (JavaClass c : classes) {
+                String k = null;
+                try {
+                    k = clsKey(c);
+                } catch (Throwable ignored) {
+                    k = null;
+                }
+                if (k != null && prio.contains(k)) first.add(c);
+                else rest.add(c);
+            }
+            if (first.isEmpty()) return classes;
+            first.addAll(rest);
+            return first;
+        } catch (Throwable ignored) {
+            return classes == null ? new ArrayList<JavaClass>() : classes;
+        }
+    }
+
     /** Un .dex suelto: carga directa. Nunca lanza. */
     private static Result decompileSingle(File input, File workDir, int threads,
                                           List<String> pkgSlashes, int maxClasses, Progress progress,
-                                          MemoryPolicy mem, String tag) {
+                                          MemoryPolicy mem, String tag, List<String> prioritySmali) {
         Result r = new Result();
         JadxDecompiler jadx = null;
         try {
@@ -327,7 +400,8 @@ public final class JadxAdapter {
             jadx = new JadxDecompiler(args);
             jadx.registerPlugin(new DexInputPlugin());
             jadx.load();
-            List<JavaClass> classes = jadx.getClassesWithInners();
+            List<JavaClass> classes = orderedForPriority(jadx.getClassesWithInners(),
+                    prioritySmali);
             r.classes = classes.size();
             int matched = 0;
             int checked = 0;
@@ -629,7 +703,8 @@ public final class JadxAdapter {
      */
     private static Result decompileZip(File apk, File workDir, int threads,
                                        List<String> pkgSlashes, int maxClasses,
-                                       Progress progress, MemoryPolicy mem) {
+                                       Progress progress, MemoryPolicy mem,
+                                       List<String> prioritySmali) {
         long maxMem;
         try {
             maxMem = Runtime.getRuntime().maxMemory();
@@ -642,11 +717,11 @@ public final class JadxAdapter {
             return decompileZipPerDex(apk, workDir, threads, pkgSlashes,
                     maxClasses, progress, mem,
                     "APK grande: directo por dex (" + plan.totalClasses + " clases)",
-                    plan.hits);
+                    plan.hits, prioritySmali);
         }
         phase(progress, "cargando APK");
         Result full = decompileSingle(apk, workDir, threads, pkgSlashes,
-                maxClasses, progress, mem, "APK");
+                maxClasses, progress, mem, "APK", prioritySmali);
         boolean totalFail = full.sources.isEmpty() && full.error != null;
         if (!full.memoryAbort && !totalFail) return full;
         phase(progress, "reintentando por dex");
@@ -655,7 +730,7 @@ public final class JadxAdapter {
         } catch (Throwable ignored) {
         }
         Result per = decompileZipPerDex(apk, workDir, threads, pkgSlashes,
-                maxClasses, progress, mem, null, null);
+                maxClasses, progress, mem, null, null, prioritySmali);
         if (per.sources.size() > full.sources.size() || full.sources.isEmpty()) return per;
         return full;
     }
@@ -668,7 +743,8 @@ public final class JadxAdapter {
     private static Result decompileZipPerDex(File apk, File workDir, int threads,
                                              List<String> pkgSlashes, int maxClasses,
                                              Progress progress, MemoryPolicy mem,
-                                             String prelude, List<DexHit> prescan) {
+                                             String prelude, List<DexHit> prescan,
+                                             List<String> prioritySmali) {
         Result acc = new Result();
         if (prelude != null && !prelude.isEmpty()) log(acc, prelude);
         int cap = maxClasses <= 0 ? Integer.MAX_VALUE : maxClasses;
@@ -741,7 +817,7 @@ public final class JadxAdapter {
                 continue;
             }
             Result one = decompileSingle(part, workDir, threads, pkgSlashes,
-                    cap - acc.sources.size(), progress, mem, dn);
+                    cap - acc.sources.size(), progress, mem, dn, prioritySmali);
             try {
                 part.delete();
             } catch (Throwable ignored) {

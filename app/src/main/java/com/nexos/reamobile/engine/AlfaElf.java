@@ -41,6 +41,8 @@ public final class AlfaElf {
         public List<String> exports = new ArrayList<>();
         public List<String> jniExports = new ArrayList<>();
         public boolean hasJniOnLoad;
+        /** PHANTOM: métodos/firmas tras RegisterNatives (best-effort, tope 40). */
+        public List<String> jniDynamic = new ArrayList<>();
         public int sectionCount;
         public boolean stripped;
         public boolean partial;

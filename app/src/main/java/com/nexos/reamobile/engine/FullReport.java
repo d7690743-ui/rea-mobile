@@ -23,6 +23,7 @@ public final class FullReport {
     public static final int MAX_JAVA_FILES = 2000;
     public static final long MAX_JAVA_CHARS = 20L * 1024 * 1024;
     public static final int MAX_STATIC_CHARS = 512 * 1024;
+    public static final int MAX_PACKAGE_CHARS = 512 * 1024;
     public static final int MAX_SMALI_CLASSES = 200;
     public static final long MAX_SMALI_CHARS = 4L * 1024 * 1024;
 
@@ -38,6 +39,7 @@ public final class FullReport {
         public int javaTotal;
         public boolean javaTruncated;
         public boolean staticIncluded;
+        public boolean packageIncluded;
         public int smaliFiles;
         public int smaliTotal;
         public boolean smaliTruncated;
@@ -54,6 +56,8 @@ public final class FullReport {
         public String build = "";
         /** Informe estático (ReaEngine.ApkReport.toText(): firma, manifest, hallazgos). */
         public String staticReport = "";
+        /** Paquete máquina-legible (ApkReport.toJson(), PHANTOM incluido). */
+        public String packageJson = "";
         /** Smali de respaldo para clases cuyo Java falta o salió vacío. */
         public SmaliProvider smali;
         public int maxSmaliClasses = MAX_SMALI_CLASSES;
@@ -116,6 +120,19 @@ public final class FullReport {
                     if (!st.endsWith("\n")) sb.append('\n');
                 }
                 r.staticIncluded = true;
+            }
+
+            if (extras != null && extras.packageJson != null
+                    && !extras.packageJson.trim().isEmpty()) {
+                String pj = extras.packageJson;
+                sb.append("\n=== PAQUETE JSON (maquina-legible, PHANTOM incluido) ===\n");
+                if (pj.length() > MAX_PACKAGE_CHARS) {
+                    sb.append(pj, 0, MAX_PACKAGE_CHARS).append("\n[...recortado...]\n");
+                } else {
+                    sb.append(pj);
+                    if (!pj.endsWith("\n")) sb.append('\n');
+                }
+                r.packageIncluded = true;
             }
 
             sb.append("\n=== ARBOL DEL APK (").append(treeTotal).append(") ===\n");

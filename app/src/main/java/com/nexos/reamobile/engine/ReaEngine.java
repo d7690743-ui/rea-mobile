@@ -161,6 +161,31 @@ public final class ReaEngine {
         public int recArscEntries;
         public boolean recArscPresent;
         public String error;
+        /** PHANTOM (caché perezosa, estilo summarizeFlow). Nunca null ni lanza. */
+        private Phantom.PhantomResult phantomCache;
+
+        public Phantom.PhantomResult phantom() {
+            try {
+                if (phantomCache == null) phantomCache = Phantom.summarize(this);
+                if (phantomCache == null) phantomCache = new Phantom.PhantomResult();
+            } catch (Throwable ignored) {
+                phantomCache = new Phantom.PhantomResult();
+            }
+            return phantomCache;
+        }
+
+        /** Flujo OMEGA memoizado (def-use+consts+taint una sola vez). Nunca null. */
+        private FlowSummary flowCache;
+
+        public FlowSummary flow() {
+            try {
+                if (flowCache == null) flowCache = computeFlow(this);
+                if (flowCache == null) flowCache = new FlowSummary();
+            } catch (Throwable ignored) {
+                flowCache = new FlowSummary();
+            }
+            return flowCache;
+        }
 
         private void finding(String section, String title, String detail, String evidence) {
             findings.add(new Finding(section, title, detail, evidence));
@@ -544,6 +569,22 @@ public final class ReaEngine {
                         .append((!sigScheme.isEmpty() || !certSubjects.isEmpty() || apkSigBlock)
                                 ? "sí" : "no").append('\n');
             }
+            Phantom.PhantomResult ph = null;
+            try {
+                ph = phantom();
+            } catch (Throwable ignored) {
+                ph = null;
+            }
+            sb.append("\n=== PHANTOM (funciones=")
+                    .append(ph == null ? 0 : ph.groups.size()).append(") ===\n");
+            if (ph == null) {
+                sb.append("  (no disponible)\n");
+            } else {
+                for (String line : Phantom.summarizeText(ph)) {
+                    if (line == null) continue;
+                    sb.append("  ").append(line).append('\n');
+                }
+            }
             return sb.toString();
         }
 
@@ -722,8 +763,58 @@ public final class ReaEngine {
                 jsonQuoted(sb, c.state == null ? "?" : c.state.name());
             }
             sb.append('}');
+            try {
+                jsonPhantom(sb, phantom());
+            } catch (Throwable ignored) {
+            }
             sb.append('}');
             return sb.toString();
+        }
+
+        /** Bloque PHANTOM del paquete JSON (acotado). Nunca lanza. */
+        private static void jsonPhantom(StringBuilder sb, Phantom.PhantomResult p) {
+            try {
+                if (p == null) return;
+                sb.append(",\"phantom\":{");
+                jsonField(sb, "metric", PhantomMetric.distribution(p.groups), true);
+                List<String> funcs = new ArrayList<>();
+                if (p.groups != null) {
+                    for (PhantomGroup.FuncGroup g : p.groups) {
+                        if (g == null || funcs.size() >= 60) break;
+                        StringBuilder f = new StringBuilder();
+                        f.append(g.id).append(' ').append(g.name);
+                        f.append(" [").append(PhantomMetric.score(g)).append("/8]");
+                        f.append(" met=").append(g.methodTotal);
+                        if (!g.entries.isEmpty()) f.append(' ').append(g.entries.get(0));
+                        funcs.add(f.toString());
+                    }
+                }
+                jsonStrList(sb, "functions", funcs);
+                List<String> nets = new ArrayList<>();
+                if (p.contracts != null) {
+                    for (PhantomNet.Contract c : p.contracts) {
+                        if (c == null || nets.size() >= 30) break;
+                        nets.add(PhantomNet.summarize(c));
+                    }
+                }
+                jsonStrList(sb, "netContracts", nets);
+                List<String> uis = new ArrayList<>();
+                if (p.ui != null) uis.addAll(PhantomUi.summarize(p.ui));
+                jsonStrList(sb, "screens", uis.size() > 70 ? uis.subList(0, 70) : uis);
+                List<String> jd = new ArrayList<>();
+                if (p.dynJni != null) {
+                    for (PhantomJni.DynLink l : p.dynJni) {
+                        if (l == null || jd.size() >= 30) break;
+                        jd.add(PhantomJni.summarize(l));
+                    }
+                }
+                jsonStrList(sb, "dynJni", jd);
+                List<String> tx = new ArrayList<>();
+                if (p.taintX != null) tx.addAll(PhantomTaint.summarize(p.taintX));
+                jsonStrList(sb, "flowX", tx.size() > 30 ? tx.subList(0, 30) : tx);
+                sb.append('}');
+            } catch (Throwable ignored) {
+            }
         }
 
         private static void jsonField(StringBuilder sb, String k, String v, boolean first) {
@@ -968,6 +1059,16 @@ public final class ReaEngine {
                             AlfaElf.ElfInfo ei = AlfaElf.parse(so, ht.head, ht.tail,
                                     ht.tailStart, ht.fileSize);
                             if (ei.error == null) {
+                                try {
+                                    boolean dyn = ei.hasJniOnLoad
+                                            || (ei.imports != null
+                                            && ei.imports.contains("RegisterNatives"));
+                                    if (dyn) {
+                                        ei.jniDynamic = PhantomJni.scanStrings(
+                                                ht.head, ht.tail);
+                                    }
+                                } catch (Throwable ignored) {
+                                }
                                 r.alfaElfs.add(ei);
                             } else {
                                 r.dexNotes.add("elf " + so + ": " + ei.error);
@@ -1828,6 +1929,12 @@ public final class ReaEngine {
                     }
                     ApkReport rep = analyze(apk);
                     putText(zos, "rea/INFORME.txt", rep.toText());
+                    try {
+                        putText(zos, "rea/paquete.json", rep.toJson());
+                        r.notes.add("paquete: rea/paquete.json incluido");
+                    } catch (Throwable ignored) {
+                        r.notes.add("paquete: no se pudo emitir el JSON");
+                    }
                     StringBuilder xs = new StringBuilder();
                     xs.append("paquete=").append(r.packageName).append('\n');
                     xs.append("entradasCopiadas=").append(r.copiedEntries).append('\n');
@@ -2213,6 +2320,7 @@ public final class ReaEngine {
             feedIntelFlow(r);
             feedIntelAlfa(r);
             feedIntelPlan(r);
+            feedIntelPhantom(r);
         } catch (Throwable ignored) {
         }
     }
@@ -2262,6 +2370,18 @@ public final class ReaEngine {
      * llamadas, taint). Vacío si no hay IRs. Nunca null ni lanza.
      */
     static FlowSummary summarizeFlow(ApkReport r) {
+        try {
+            if (r != null) return r.flow();
+        } catch (Throwable ignored) {
+        }
+        return computeFlow(r);
+    }
+
+    /**
+     * Cómputo real del resumen de flujo (ver {@link #summarizeFlow}).
+     * Nunca null ni lanza.
+     */
+    private static FlowSummary computeFlow(ApkReport r) {
         FlowSummary s = new FlowSummary();
         try {
             if (r == null || r.flowIrs == null || r.flowIrs.isEmpty()) return s;
@@ -2703,14 +2823,32 @@ public final class ReaEngine {
         }
     }
 
+    /**
+     * PHANTOM: funciones, contratos, pantallas, JNI dinámico y multisalto
+     * al registro (perezoso con caché). Nunca lanza.
+     */
+    static void feedIntelPhantom(ApkReport r) {
+        try {
+            if (r == null || r.intel == null) return;
+            Phantom.PhantomResult p = null;
+            try {
+                p = r.phantom();
+            } catch (Throwable ignored) {
+                p = null;
+            }
+            Phantom.feedIntel(r, p);
+        } catch (Throwable ignored) {
+        }
+    }
+
     private static void finishStatic(ApkReport r) {
         feedIntel(r);
         r.limitations.add("Java bajo demanda en el visor (JADX on-device con topes); el informe base no incluye fuentes.");
         r.limitations.add("Flujo de datos parcial: def-use/taint best-effort con topes (inter de un salto, sin heap ni reflexión).");
         r.limitations.add("Sin análisis dinámico (Frida/adb): estático únicamente.");
         r.limitations.add("AXML y ARSC decodificados con parser propio (best-effort).");
-        r.limitations.add("Nativas: ELF parseado (símbolos/JNI), sin desensamblado ni RegisterNatives.");
-        r.limitations.add("UI: layouts sin resolver setContentView; handlers unidos por nombre.");
+        r.limitations.add("Nativas: ELF parseado (símbolos/JNI), sin desensamblado; RegisterNatives best-effort (PHANTOM).");
+        r.limitations.add("UI: setContentView resuelto best-effort (PHANTOM, id sin nombre); handlers verificados en grafo.");
         r.limitations.add("Blueprint: correlación por literal compartido, no flujo verificado.");
         r.limitations.add("Muestreo con topes en APKs grandes (ver notas).");
         r.unknowns.add("Comportamiento en ejecución (runtime).");
