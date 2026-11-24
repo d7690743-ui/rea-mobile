@@ -175,6 +175,43 @@ public class SmaliExtractTest {
         assertTrue(sd.r.notes.size() >= 1);
     }
 
+    @Test
+    public void fidelidadInterfacesEstaticosTryAnotaciones() {
+        List<byte[]> dexes = new ArrayList<>();
+        dexes.add(buildFidelityDex());
+        SmaliDumper.DumpResult r = SmaliDumper.dumpAll(dexes, "com/x/");
+        assertEquals(1, r.classes.size());
+        String smali = r.classes.get(0).text;
+        assertTrue(smali, smali.contains(".implements Ljava/io/Serializable;"));
+        assertTrue(smali, smali.contains(
+                ".field public static final TAG:Ljava/lang/String; = \"hello\""));
+        assertTrue(smali, smali.contains(".annotation runtime Lfoo/Ann;"));
+        assertTrue(smali, smali.contains("value = 0x0000002a"));
+        assertTrue(smali, smali.contains(
+                ".catch Ljava/lang/Object; { :L0000 .. :L0002 } :L0002"));
+        assertTrue(smali, smali.contains(".end method"));
+    }
+
+    @Test
+    public void fullDumpVuelcaTodas() {
+        final List<String> paths = new ArrayList<>();
+        SmaliDumper.ClassSink sink = new SmaliDumper.ClassSink() {
+            public void accept(String path, String text) {
+                paths.add(path);
+            }
+        };
+        SmaliDumper.FullDump fd = new SmaliDumper.FullDump("com/otro/", sink);
+        fd.addDex(buildTestDexWithInner());
+        assertEquals(2, fd.r.scanned);
+        assertEquals(2, fd.r.dumped);
+        assertEquals(0, fd.r.ownMatched);
+        assertTrue(fd.r.classSummaries.isEmpty());
+        assertEquals(2, paths.size());
+        assertTrue(paths.contains("smali/com/x/A.smali"));
+        fd.addDex(null);
+        fd.addDex(new byte[10]);
+    }
+
     static void put(ZipOutputStream zos, String name, byte[] data) throws Exception {
         zos.putNextEntry(new ZipEntry(name));
         zos.write(data);
@@ -447,6 +484,178 @@ public class SmaliExtractTest {
         d.mapItem(0x1000, 1, mapOff);
         d.mapItem(0x2000, 1, cd);
         d.mapItem(0x2001, 8, code0);
+        d.mapItem(0x2002, strs.length, firstStrData);
+        d.setU32(pDataSize, d.pos - dataOff);
+        d.setU32(pFileSize, d.pos);
+        return d.finish();
+    }
+
+    /** DEX fidelidad: 1 clase con interfaz, estático con valor, try/catch y anotación. */
+    static byte[] buildFidelityDex() {
+        String[] strs = {"Lcom/x/F;", "Ljava/lang/Object;", "Ljava/io/Serializable;",
+                "run", "F.java", "V", "TAG", "Ljava/lang/String;", "hello", "Lfoo/Ann;", "value"};
+        DexBuilder d = new DexBuilder();
+        d.bytes(new byte[]{'d', 'e', 'x', '\n', '0', '3', '5', 0});
+        d.u32(0);
+        for (int i = 0; i < 20; i++) d.u8(0);
+        int pFileSize = d.pos;
+        d.u32(0);
+        d.u32(0x70);
+        d.u32(0x12345678);
+        d.u32(0);
+        d.u32(0);
+        int pMapOff = d.pos;
+        d.u32(0);
+        d.u32(strs.length);
+        int pStrOff = d.pos;
+        d.u32(0);
+        d.u32(6);
+        int pTypeOff = d.pos;
+        d.u32(0);
+        d.u32(1);
+        int pProtoOff = d.pos;
+        d.u32(0);
+        d.u32(1);
+        int pFieldOff = d.pos;
+        d.u32(0);
+        d.u32(1);
+        int pMethOff = d.pos;
+        d.u32(0);
+        d.u32(1);
+        int pClsOff = d.pos;
+        d.u32(0);
+        int pDataSize = d.pos;
+        d.u32(0);
+        int pDataOff = d.pos;
+        d.u32(0);
+        int strIdsOff = d.pos;
+        d.setU32(pStrOff, strIdsOff);
+        int[] strIdPos = new int[strs.length];
+        for (int i = 0; i < strs.length; i++) {
+            strIdPos[i] = d.pos;
+            d.u32(0);
+        }
+        int typeIdsOff = d.pos;
+        d.setU32(pTypeOff, typeIdsOff);
+        int[] typeStr = {0, 1, 2, 5, 7, 9};
+        for (int s : typeStr) d.u32(s);
+        int protoIdsOff = d.pos;
+        d.setU32(pProtoOff, protoIdsOff);
+        d.u32(5);
+        d.u32(3);
+        d.u32(0);
+        int fieldIdsOff = d.pos;
+        d.setU32(pFieldOff, fieldIdsOff);
+        d.u16(0);
+        d.u16(4);
+        d.u32(6);
+        int methIdsOff = d.pos;
+        d.setU32(pMethOff, methIdsOff);
+        d.u16(0);
+        d.u16(0);
+        d.u32(3);
+        int clsDefsOff = d.pos;
+        d.setU32(pClsOff, clsDefsOff);
+        d.u32(0);
+        d.u32(1);
+        d.u32(1);
+        int pIfaces = d.pos;
+        d.u32(0);
+        d.u32(4);
+        int pAnnot = d.pos;
+        d.u32(0);
+        int pClassData = d.pos;
+        d.u32(0);
+        int pStatics = d.pos;
+        d.u32(0);
+        int dataOff = d.pos;
+        d.setU32(pDataOff, dataOff);
+        int firstStrData = d.pos;
+        for (int i = 0; i < strs.length; i++) {
+            d.setU32(strIdPos[i], d.pos);
+            byte[] sb = strs[i].getBytes(StandardCharsets.UTF_8);
+            d.uleb(sb.length);
+            d.bytes(sb);
+            d.u8(0);
+        }
+        // run: 3 nop + return-void, try{0..2} catch Object -> 2
+        d.align();
+        int code0 = d.pos;
+        d.u16(2);
+        d.u16(1);
+        d.u16(0);
+        d.u16(1);
+        d.u32(0);
+        d.u32(4);
+        d.u16(0x0000);
+        d.u16(0x0000);
+        d.u16(0x0000);
+        d.u16(0x000e);
+        d.u32(0);
+        d.u16(2);
+        d.u16(0);
+        d.u8(0x01);
+        d.u8(0x01);
+        d.u8(0x02);
+        int cd = d.pos;
+        d.setU32(pClassData, cd);
+        d.uleb(1);
+        d.uleb(0);
+        d.uleb(1);
+        d.uleb(0);
+        d.uleb(0);
+        d.uleb(0x19);
+        d.uleb(0);
+        d.uleb(0x1);
+        d.uleb(code0);
+        d.align();
+        int ifOff = d.pos;
+        d.setU32(pIfaces, ifOff);
+        d.u32(1);
+        d.u16(2);
+        int stOff = d.pos;
+        d.setU32(pStatics, stOff);
+        d.uleb(1);
+        d.u8(0x17);
+        d.u8(8);
+        int anOff = d.pos;
+        d.setU32(pAnnot, anOff);
+        int pClsSet = d.pos;
+        d.u32(0);
+        d.u32(0);
+        d.u32(1);
+        d.u32(0);
+        d.u32(0);
+        int pMethSet = d.pos;
+        d.u32(0);
+        int setOff = d.pos;
+        d.setU32(pClsSet, setOff);
+        d.setU32(pMethSet, setOff);
+        d.u32(1);
+        int pItem = d.pos;
+        d.u32(0);
+        int itemOff = d.pos;
+        d.setU32(pItem, itemOff);
+        d.u8(1);
+        d.uleb(5);
+        d.uleb(1);
+        d.uleb(10);
+        d.u8(0x04);
+        d.u8(0x2A);
+        d.align();
+        int mapOff = d.pos;
+        d.setU32(pMapOff, mapOff);
+        d.u32(11);
+        d.mapItem(0x0000, 1, 0);
+        d.mapItem(0x0001, strs.length, strIdsOff);
+        d.mapItem(0x0002, 6, typeIdsOff);
+        d.mapItem(0x0003, 1, protoIdsOff);
+        d.mapItem(0x0004, 1, fieldIdsOff);
+        d.mapItem(0x0005, 1, methIdsOff);
+        d.mapItem(0x0006, 1, clsDefsOff);
+        d.mapItem(0x1000, 1, mapOff);
+        d.mapItem(0x2000, 1, cd);
+        d.mapItem(0x2001, 1, code0);
         d.mapItem(0x2002, strs.length, firstStrData);
         d.setU32(pDataSize, d.pos - dataOff);
         d.setU32(pFileSize, d.pos);

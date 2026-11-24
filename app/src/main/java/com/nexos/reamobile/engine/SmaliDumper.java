@@ -6,9 +6,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Desensamblador Dalvik a smali (best-effort) para las clases del paquete propio.
- * Java puro. Omite debug_info y try/catch; los payloads de switch/array se emiten
- * como comentarios con datos crudos (no reensamblables). Pensado para análisis.
+ * Desensamblador Dalvik a smali (best-effort): interfaces, valores estáticos,
+ * anotaciones, try/catch y código. Java puro. Omite debug_info; los payloads
+ * de switch/array se emiten como comentarios con datos crudos (no
+ * reensamblables). Pensado para análisis y recuperación, no para reensamblar
+ * a ciegas: lo dudoso queda marcado con '#'.
  */
 public final class SmaliDumper {
     private SmaliDumper() {
@@ -158,6 +160,22 @@ public final class SmaliDumper {
         public List<String> notes = new ArrayList<>();
         public long bytes;
         public boolean truncated;
+        /** Cobertura (ambos modos): clases vistas / volcadas / propias. */
+        public int scanned;
+        public int dumped;
+        public int ownMatched;
+    }
+
+    /** Destino de clases volcadas (p. ej. escribir directo al ZIP). */
+    public interface ClassSink {
+        void accept(String path, String text);
+    }
+
+    /** El sink la lanza para detener el volcado (tope); FullDump la absorbe. */
+    public static class Stop extends RuntimeException {
+        public Stop(String m) {
+            super(m);
+        }
     }
 
     /**
@@ -208,6 +226,36 @@ public final class SmaliDumper {
         }
     }
 
+    /**
+     * Volcado TOTAL dex por dex: todas las clases (propias y librerías) van
+     * al sink en streaming, sin retenerlas (sin topes 1500/40MB de memoria).
+     * Los resúmenes solo cubren el paquete propio. Sigue el tope por método
+     * (6000 units, marcado en el smali). Nunca lanza.
+     */
+    public static class FullDump {
+        public final DumpResult r = new DumpResult();
+        private final String ownSlash;
+        private final ClassSink sink;
+
+        public FullDump(String ownSlash, ClassSink sink) {
+            this.ownSlash = ownSlash == null ? "" : ownSlash;
+            this.sink = sink;
+        }
+
+        /** Vuelca un dex completo al sink (null-seguro). Nunca lanza. */
+        public void addDex(byte[] dex) {
+            try {
+                if (dex == null) return;
+                dumpFull(dex, ownSlash, sink, r);
+            } catch (Stop s) {
+                r.truncated = true;
+                r.notes.add("smali: detenido (" + s.getMessage() + ")");
+            } catch (RuntimeException e) {
+                r.notes.add("dex omitido: " + e.getMessage());
+            }
+        }
+    }
+
     /** Desensambla las clases bajo pkgSlash (p.ej. "com/nexos/app/") de todos los dex. */
     public static DumpResult dumpAll(List<byte[]> dexes, String pkgSlash) {
         StreamDump sd = new StreamDump(pkgSlash);
@@ -236,6 +284,67 @@ public final class SmaliDumper {
         return sd.r;
     }
 
+    /**
+     * Cuenta prefijos de clases de un dex (sin desensamblar) para elegir el
+     * paquete propio antes del volcado total. Nunca lanza.
+     */
+    public static void countPrefixes(byte[] dex, Map<String, Integer> out) {
+        try {
+            if (dex == null || out == null || dex.length < 0x70) return;
+            if (dex[0] != 'd' || dex[1] != 'e' || dex[2] != 'x') return;
+            int stringN = u32(dex, 56);
+            int stringOff = u32(dex, 60);
+            int typeN = u32(dex, 64);
+            int typeOff = u32(dex, 68);
+            int classN = u32(dex, 96);
+            int classOff = u32(dex, 100);
+            if (stringN < 0 || stringN > 2000000 || typeN < 0 || typeN > 1000000
+                    || classN < 0 || classN > 500000) return;
+            DexStrings strings = DexStrings.of(dex, stringOff, stringN);
+            DexTypes types = DexTypes.of(dex, typeOff, typeN, strings);
+            for (int i = 0; i < classN; i++) {
+                int p = classOff + i * 32;
+                if (p + 32 > dex.length) break;
+                String cls;
+                try {
+                    cls = types.get(u32(dex, p));
+                } catch (Throwable ignored) {
+                    continue;
+                }
+                countPrefix(out, cls);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * Elige el prefijo propio: pkgSlash si aparece, si no el no-framework
+     * más numeroso, si no "". Nunca null ni lanza.
+     */
+    public static String pickOwnPrefix(Map<String, Integer> counts, String pkgSlash) {
+        try {
+            if (counts == null) return "";
+            if (pkgSlash != null && !pkgSlash.isEmpty()) {
+                for (String k : counts.keySet()) {
+                    if (k != null && k.startsWith(pkgSlash)) return pkgSlash;
+                }
+            }
+            String best = "";
+            int bestN = 0;
+            for (Map.Entry<String, Integer> e : counts.entrySet()) {
+                if (e.getKey() == null || e.getValue() == null) continue;
+                if (isFrameworkPrefix(e.getKey())) continue;
+                if (e.getValue() > bestN) {
+                    bestN = e.getValue();
+                    best = e.getKey();
+                }
+            }
+            return best;
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
     /** Desensambla una sola clase (descriptor estilo "Lcom/x/A;") o null. */
     public static String dumpSingleClass(List<byte[]> dexes, String classDesc) {
         if (dexes == null || classDesc == null) return null;
@@ -253,7 +362,8 @@ public final class SmaliDumper {
                     if (!classDesc.equals(cls)) continue;
                     DumpResult tmp = new DumpResult();
                     return dumpClass(dex, t, tmp, cls, u32(dex, p + 4), u32(dex, p + 8),
-                            u32(dex, p + 16), u32(dex, p + 24));
+                            u32(dex, p + 16), u32(dex, p + 24), u32(dex, p + 12),
+                            u32(dex, p + 20), u32(dex, p + 28));
                 }
             } catch (RuntimeException e) {
                 // prueba con el siguiente dex
@@ -285,9 +395,12 @@ public final class SmaliDumper {
             int dataOff = u32(dex, p + 24);
             String cls = typeAt(t, classIdx);
             countPrefix(prefixCount, cls);
+            r.scanned++;
             if (!cls.startsWith("L" + filterSlash)) continue;
+            r.ownMatched++;
             try {
-                String text = dumpClass(dex, t, r, cls, access, superIdx, srcIdx, dataOff);
+                String text = dumpClass(dex, t, r, cls, access, superIdx, srcIdx, dataOff,
+                        u32(dex, p + 12), u32(dex, p + 20), u32(dex, p + 28));
                 if (r.bytes + text.length() > MAX_TOTAL_BYTES) {
                     r.truncated = true;
                     return;
@@ -297,8 +410,54 @@ public final class SmaliDumper {
                 sc.text = text;
                 r.classes.add(sc);
                 r.bytes += text.length();
+                r.dumped++;
             } catch (RuntimeException e) {
                 r.notes.add(cls + ": omitida (" + e.getMessage() + ")");
+            }
+        }
+    }
+
+    /**
+     * Núcleo del volcado total: todas las clases al sink, resúmenes solo
+     * propias. Sin topes de memoria; los truncados van a notas (tope 200).
+     */
+    private static void dumpFull(byte[] dex, String ownSlash, ClassSink sink, DumpResult r) {
+        if (dex == null || dex.length < 0x70 || dex[0] != 'd' || dex[1] != 'e' || dex[2] != 'x') {
+            throw new IllegalArgumentException("dex inválido");
+        }
+        Tables t = buildTables(dex);
+        int classN = u32(dex, 96);
+        int classOff = u32(dex, 100);
+        if (classN < 0 || classN > 500000) throw new IllegalArgumentException("class_defs inválido");
+        for (int i = 0; i < classN; i++) {
+            int p = classOff + i * 32;
+            if (p + 32 > dex.length) break;
+            int classIdx = u32(dex, p);
+            int access = u32(dex, p + 4);
+            int superIdx = u32(dex, p + 8);
+            int srcIdx = u32(dex, p + 16);
+            int dataOff = u32(dex, p + 24);
+            String cls = typeAt(t, classIdx);
+            r.scanned++;
+            boolean own = !ownSlash.isEmpty() && cls.startsWith("L" + ownSlash);
+            if (own) r.ownMatched++;
+            try {
+                // Resúmenes solo propias: volcado temporal y descarte si ajena.
+                int sum0 = r.classSummaries.size();
+                String text = dumpClass(dex, t, r, cls, access, superIdx, srcIdx, dataOff,
+                        u32(dex, p + 12), u32(dex, p + 20), u32(dex, p + 28));
+                if (!own && r.classSummaries.size() > sum0) {
+                    r.classSummaries.remove(r.classSummaries.size() - 1);
+                }
+                if (sink != null) {
+                    sink.accept("smali/" + cls.substring(1, cls.length() - 1) + ".smali", text);
+                }
+                r.bytes += text.length();
+                r.dumped++;
+            } catch (Stop s) {
+                throw s;
+            } catch (RuntimeException e) {
+                if (r.notes.size() < 200) r.notes.add(cls + ": omitida (" + e.getMessage() + ")");
             }
         }
     }
@@ -342,13 +501,35 @@ public final class SmaliDumper {
     }
 
     private static String dumpClass(byte[] dex, Tables t, DumpResult r, String cls, int access,
-                                    int superIdx, int srcIdx, int dataOff) {
+                                    int superIdx, int srcIdx, int dataOff, int ifacesOff,
+                                    int annotOff, int staticOff) {
         StringBuilder sb = new StringBuilder();
         sb.append(".class ").append(accessStr(access, 0)).append(cls).append('\n');
         String sup = (superIdx == 0xFFFFFFFF || superIdx < 0) ? "Ljava/lang/Object;" : typeAt(t, superIdx);
         sb.append(".super ").append(sup).append('\n');
         String src = (srcIdx == 0xFFFFFFFF) ? "" : t.strings.get(srcIdx);
         if (!src.isEmpty() && !src.equals("?")) sb.append(".source \"").append(escape(src)).append("\"\n");
+        try {
+            for (String iface : interfacesAt(dex, t, ifacesOff)) {
+                sb.append(".implements ").append(iface).append('\n');
+            }
+        } catch (RuntimeException e) {
+            sb.append("# interfaces omitidas\n");
+        }
+        AnnotDir annots = new AnnotDir();
+        try {
+            annots = parseAnnotDir(dex, annotOff);
+            String clsAnn = renderAnnotSet(dex, t, annots.classSet, "");
+            if (!clsAnn.isEmpty()) sb.append("\n# annotations\n").append(clsAnn);
+        } catch (RuntimeException e) {
+            sb.append("\n# anotaciones de clase omitidas\n");
+        }
+        List<String> staticVals = new ArrayList<>();
+        try {
+            staticVals = staticValuesAt(dex, t, staticOff);
+        } catch (RuntimeException e) {
+            sb.append("# valores estáticos omitidos\n");
+        }
         sb.append('\n');
         int methods = 0;
         int insns = 0;
@@ -379,7 +560,12 @@ public final class SmaliDumper {
                 a = AxmlDecoder.readUleb128(dex, p);
                 int fAcc = a[0];
                 p = a[1];
-                sb.append(".field ").append(accessStr(fAcc, 2)).append(fieldName(t, fIdx)).append('\n');
+                sb.append(".field ").append(accessStr(fAcc, 2)).append(fieldName(t, fIdx));
+                if (i < staticVals.size() && staticVals.get(i) != null) {
+                    sb.append(" = ").append(staticVals.get(i));
+                }
+                sb.append('\n');
+                appendFieldAnnot(dex, t, sb, annots, fIdx);
             }
             if (instanceN > 0) sb.append("# instance fields\n");
             fIdx = 0;
@@ -391,6 +577,7 @@ public final class SmaliDumper {
                 int fAcc = a[0];
                 p = a[1];
                 sb.append(".field ").append(accessStr(fAcc, 2)).append(fieldName(t, fIdx)).append('\n');
+                appendFieldAnnot(dex, t, sb, annots, fIdx);
             }
             if (directN > 0) sb.append("\n# direct methods\n");
             int mIdx = 0;
@@ -399,7 +586,7 @@ public final class SmaliDumper {
                 int[] rr = readMethod(dex, p);
                 mIdx += rr[0];
                 p = rr[3];
-                methods += renderMethod(dex, t, sb, mIdx, rr[1], rr[2], counts);
+                methods += renderMethod(dex, t, sb, mIdx, rr[1], rr[2], counts, annots);
             }
             if (virtualN > 0) sb.append("\n# virtual methods\n");
             mIdx = 0;
@@ -407,12 +594,447 @@ public final class SmaliDumper {
                 int[] rr = readMethod(dex, p);
                 mIdx += rr[0];
                 p = rr[3];
-                methods += renderMethod(dex, t, sb, mIdx, rr[1], rr[2], counts);
+                methods += renderMethod(dex, t, sb, mIdx, rr[1], rr[2], counts, annots);
             }
+            if (directN + virtualN > methods) sb.append("# métodos recortados (tope 2000)\n");
             insns = counts[0];
         }
         r.classSummaries.add(cls + " | super=" + sup + " | metodos=" + methods + " | insns~" + insns);
         return sb.toString();
+    }
+
+    /** Añade las anotaciones de un campo tras su .field. Nunca lanza. */
+    private static void appendFieldAnnot(byte[] dex, Tables t, StringBuilder sb,
+                                         AnnotDir annots, int fIdx) {
+        try {
+            if (annots == null || !annots.fields.containsKey(fIdx)) return;
+            String block = renderAnnotSet(dex, t, annots.fields.get(fIdx), "");
+            if (!block.isEmpty()) sb.append("# annotations\n").append(block);
+        } catch (RuntimeException e) {
+            sb.append("# anotaciones de campo omitidas\n");
+        }
+    }
+
+    /** Lee sleb128. Devuelve {valor, nextPos}. Nunca null. */
+    private static int[] readSleb128(byte[] b, int p) {
+        int result = 0;
+        int shift = 0;
+        for (int i = 0; i < 5; i++) {
+            check(b, p, 1);
+            int cur = b[p++] & 0xFF;
+            result |= (cur & 0x7F) << shift;
+            shift += 7;
+            if ((cur & 0x80) == 0) {
+                if (shift < 32 && (cur & 0x40) != 0) result |= -(1 << shift);
+                return new int[]{result, p};
+            }
+        }
+        throw new IllegalArgumentException("sleb128 largo");
+    }
+
+    /** Lee n bytes LE (con o sin signo). */
+    private static long readLe(byte[] dex, int p, int n) {
+        check(dex, p, n);
+        long v = 0;
+        for (int i = 0; i < n; i++) v |= ((long) (dex[p + i] & 0xFF)) << (8 * i);
+        return v;
+    }
+
+    private static long signExtend(long v, int n) {
+        if (n < 8 && (v & (1L << (8 * n - 1))) != 0) v |= -(1L << (8 * n));
+        return v;
+    }
+
+    /** Valor codificado leído: texto smali + siguiente posición. */
+    private static class EncVal {
+        String text = "?";
+        int next;
+    }
+
+    /**
+     * Parsea un encoded_value DEX a literal smali. Profundidad acotada.
+     * Lanza RuntimeException si está corrupto (el llamador lo marca).
+     */
+    private static EncVal readEncVal(byte[] dex, Tables t, int p, int depth, String pad) {
+        EncVal r = new EncVal();
+        if (depth > 8) throw new IllegalArgumentException("valor profundo");
+        check(dex, p, 1);
+        int b0 = dex[p++] & 0xFF;
+        int arg = (b0 >> 5) & 0x7;
+        int type = b0 & 0x1F;
+        int n = arg + 1;
+        switch (type) {
+            case 0x00: { // byte
+                long v = readLe(dex, p, 1);
+                r.text = "0x" + hex(v & 0xFF, 2) + "t";
+                r.next = p + 1;
+                return r;
+            }
+            case 0x02: { // short
+                if (n > 2) throw new IllegalArgumentException("short largo");
+                long v = signExtend(readLe(dex, p, n), n);
+                r.text = "0x" + hex(v & 0xFFFF, 4) + "s";
+                r.next = p + n;
+                return r;
+            }
+            case 0x03: { // char
+                if (n > 2) throw new IllegalArgumentException("char largo");
+                long v = readLe(dex, p, n);
+                r.text = "0x" + hex(v & 0xFFFF, 4) + "c";
+                r.next = p + n;
+                return r;
+            }
+            case 0x04: { // int
+                if (n > 4) throw new IllegalArgumentException("int largo");
+                long v = signExtend(readLe(dex, p, n), n);
+                r.text = "0x" + hex(v & 0xFFFFFFFFL, 8);
+                r.next = p + n;
+                return r;
+            }
+            case 0x06: { // long
+                if (n > 8) throw new IllegalArgumentException("long largo");
+                long v = signExtend(readLe(dex, p, n), n);
+                r.text = "0x" + Long.toHexString(v) + "L";
+                r.next = p + n;
+                return r;
+            }
+            case 0x10: { // float (extensión con ceros a la derecha)
+                if (n > 4) throw new IllegalArgumentException("float largo");
+                int bits = (int) readLe(dex, p, n);
+                r.text = Float.toString(Float.intBitsToFloat(bits)) + "f";
+                r.next = p + n;
+                return r;
+            }
+            case 0x11: { // double
+                if (n > 8) throw new IllegalArgumentException("double largo");
+                long bits = readLe(dex, p, n);
+                r.text = Double.toString(Double.longBitsToDouble(bits));
+                r.next = p + n;
+                return r;
+            }
+            case 0x17: { // string
+                int idx = (int) readLe(dex, p, n);
+                String s;
+                try {
+                    s = t.strings.get(idx);
+                } catch (Throwable ignored) {
+                    s = "?";
+                }
+                r.text = "\"" + escape(s == null ? "?" : s) + "\"";
+                r.next = p + n;
+                return r;
+            }
+            case 0x18: { // type
+                int idx = (int) readLe(dex, p, n);
+                r.text = typeAt(t, idx);
+                r.next = p + n;
+                return r;
+            }
+            case 0x19: // field
+            case 0x1b: { // enum
+                int idx = (int) readLe(dex, p, n);
+                r.text = fieldRef(t, idx);
+                r.next = p + n;
+                return r;
+            }
+            case 0x1a: { // method
+                int idx = (int) readLe(dex, p, n);
+                r.text = methodRef(t, idx);
+                r.next = p + n;
+                return r;
+            }
+            case 0x1c: { // array
+                int[] a = AxmlDecoder.readUleb128(dex, p);
+                int size = a[0];
+                p = a[1];
+                if (size < 0 || size > 10000) throw new IllegalArgumentException("array largo");
+                StringBuilder sb = new StringBuilder("{ ");
+                for (int i = 0; i < size; i++) {
+                    if (i > 0) sb.append(", ");
+                    EncVal e = readEncVal(dex, t, p, depth + 1, pad);
+                    sb.append(e.text);
+                    p = e.next;
+                }
+                sb.append(size == 0 ? "}" : " }");
+                r.text = sb.toString();
+                r.next = p;
+                return r;
+            }
+            case 0x1d: { // annotation anidada
+                r.text = readSubAnnotation(dex, t, p, depth, pad);
+                r.next = subNext;
+                return r;
+            }
+            case 0x1e: // null
+                r.text = "null";
+                r.next = p;
+                return r;
+            case 0x1f: // boolean
+                r.text = arg == 0 ? "false" : "true";
+                r.next = p;
+                return r;
+            default:
+                throw new IllegalArgumentException("valor tipo 0x" + Integer.toHexString(type));
+        }
+    }
+
+    /** Siguiente posición tras readSubAnnotation (hilo único, best-effort). */
+    private static int subNext;
+
+    /** Parsea una encoded_annotation anidada a bloque .subannotation. */
+    private static String readSubAnnotation(byte[] dex, Tables t, int p, int depth, String pad) {
+        int[] a = AxmlDecoder.readUleb128(dex, p);
+        String type = typeAt(t, a[0]);
+        p = a[1];
+        int[] b = AxmlDecoder.readUleb128(dex, p);
+        int size = b[0];
+        p = b[1];
+        if (size < 0 || size > 1000) throw new IllegalArgumentException("anotación larga");
+        StringBuilder sb = new StringBuilder(".subannotation ").append(type).append(";\n");
+        for (int i = 0; i < size; i++) {
+            int[] c = AxmlDecoder.readUleb128(dex, p);
+            String name;
+            try {
+                name = t.strings.get(c[0]);
+            } catch (Throwable ignored) {
+                name = "?";
+            }
+            p = c[1];
+            EncVal e = readEncVal(dex, t, p, depth + 1, pad + "    ");
+            p = e.next;
+            sb.append(pad).append("    ").append(name).append(" = ").append(e.text).append('\n');
+        }
+        sb.append(pad).append(".end subannotation");
+        subNext = p;
+        return sb.toString();
+    }
+
+    /** Referencia completa de campo "Lclase;->nombre:Tipo". Nunca lanza. */
+    private static String fieldRef(Tables t, int idx) {
+        try {
+            if (idx < 0 || idx >= t.fClass.length) return "campo#0x" + Integer.toHexString(idx);
+            return typeAt(t, t.fClass[idx]) + "->" + fieldName(t, idx);
+        } catch (Throwable ignored) {
+            return "campo#0x" + Integer.toHexString(idx);
+        }
+    }
+
+    /** Referencia completa de método. Nunca lanza. */
+    private static String methodRef(Tables t, int idx) {
+        try {
+            if (idx < 0 || idx >= t.mClass.length) return "metodo#0x" + Integer.toHexString(idx);
+            String name;
+            try {
+                name = t.strings.get(t.mName[idx]);
+            } catch (Throwable ignored) {
+                name = "?";
+            }
+            return typeAt(t, t.mClass[idx]) + "->" + name + protoString(t, t.mProto[idx]);
+        } catch (Throwable ignored) {
+            return "metodo#0x" + Integer.toHexString(idx);
+        }
+    }
+
+    /** Lista de interfaces (type_list). Vacía si off==0. Puede lanzar. */
+    private static List<String> interfacesAt(byte[] dex, Tables t, int off) {
+        List<String> out = new ArrayList<>();
+        if (off == 0) return out;
+        check(dex, off, 4);
+        int size = u32(dex, off);
+        if (size < 0 || size > 10000) throw new IllegalArgumentException("type_list inválido");
+        check(dex, off + 4, size * 2);
+        for (int i = 0; i < size; i++) out.add(typeAt(t, u16(dex, off + 4 + i * 2)));
+        return out;
+    }
+
+    /** Valores estáticos (encoded_array). Vacía si off==0. Puede lanzar. */
+    private static List<String> staticValuesAt(byte[] dex, Tables t, int off) {
+        List<String> out = new ArrayList<>();
+        if (off == 0) return out;
+        int[] a = AxmlDecoder.readUleb128(dex, off);
+        int size = a[0];
+        int p = a[1];
+        if (size < 0 || size > 100000) throw new IllegalArgumentException("static_values largo");
+        for (int i = 0; i < size; i++) {
+            EncVal e = readEncVal(dex, t, p, 0, "");
+            out.add(e.text);
+            p = e.next;
+        }
+        return out;
+    }
+
+    /** Directorio de anotaciones de una clase. */
+    private static class AnnotDir {
+        int classSet;
+        Map<Integer, Integer> fields = new LinkedHashMap<>();
+        Map<Integer, Integer> methods = new LinkedHashMap<>();
+        Map<Integer, Integer> params = new LinkedHashMap<>();
+    }
+
+    /** Parsea annotation_directory_item. Vacío si off==0. Puede lanzar. */
+    private static AnnotDir parseAnnotDir(byte[] dex, int off) {
+        AnnotDir d = new AnnotDir();
+        if (off == 0) return d;
+        check(dex, off, 16);
+        d.classSet = u32(dex, off);
+        int fn = u32(dex, off + 4);
+        int mn = u32(dex, off + 8);
+        int pn = u32(dex, off + 12);
+        if (fn < 0 || fn > 100000 || mn < 0 || mn > 100000 || pn < 0 || pn > 10000) {
+            throw new IllegalArgumentException("annot_dir inválido");
+        }
+        int p = off + 16;
+        check(dex, p, (fn + mn + pn) * 8);
+        for (int i = 0; i < fn; i++) {
+            d.fields.put(u32(dex, p), u32(dex, p + 4));
+            p += 8;
+        }
+        for (int i = 0; i < mn; i++) {
+            d.methods.put(u32(dex, p), u32(dex, p + 4));
+            p += 8;
+        }
+        for (int i = 0; i < pn; i++) {
+            d.params.put(u32(dex, p), u32(dex, p + 4));
+            p += 8;
+        }
+        return d;
+    }
+
+    private static String visibilityName(int v) {
+        if (v == 0) return "build";
+        if (v == 2) return "system";
+        return "runtime";
+    }
+
+    /**
+     * Renderiza un annotation_set_item a bloques smali con indentación pad.
+     * "" si off==0 o vacío. Puede lanzar si está corrupto.
+     */
+    private static String renderAnnotSet(byte[] dex, Tables t, int off, String pad) {
+        if (off == 0) return "";
+        check(dex, off, 4);
+        int size = u32(dex, off);
+        if (size < 0 || size > 1000) throw new IllegalArgumentException("annot_set largo");
+        check(dex, off + 4, size * 4);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < size; i++) {
+            int item = u32(dex, off + 4 + i * 4);
+            check(dex, item, 2);
+            int vis = dex[item] & 0xFF;
+            int p = item + 1;
+            int[] a = AxmlDecoder.readUleb128(dex, p);
+            String type = typeAt(t, a[0]);
+            p = a[1];
+            int[] b = AxmlDecoder.readUleb128(dex, p);
+            int n = b[0];
+            p = b[1];
+            if (n < 0 || n > 1000) throw new IllegalArgumentException("anotación larga");
+            sb.append(pad).append(".annotation ").append(visibilityName(vis)).append(' ')
+                    .append(type).append(";\n");
+            for (int k = 0; k < n; k++) {
+                int[] c = AxmlDecoder.readUleb128(dex, p);
+                String name;
+                try {
+                    name = t.strings.get(c[0]);
+                } catch (Throwable ignored) {
+                    name = "?";
+                }
+                p = c[1];
+                EncVal e = readEncVal(dex, t, p, 0, pad + "    ");
+                p = e.next;
+                sb.append(pad).append("    ").append(name).append(" = ").append(e.text)
+                        .append('\n');
+            }
+            sb.append(pad).append(".end annotation\n");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Renderiza annotation_set_ref_list (anotaciones de parámetros).
+     * Devuelve por índice de parámetro su bloque (indent pad). Puede lanzar.
+     */
+    private static List<String> renderParamAnnots(byte[] dex, Tables t, int off, String pad) {
+        List<String> out = new ArrayList<>();
+        if (off == 0) return out;
+        check(dex, off, 4);
+        int size = u32(dex, off);
+        if (size < 0 || size > 1000) throw new IllegalArgumentException("param_list largo");
+        check(dex, off + 4, size * 4);
+        for (int i = 0; i < size; i++) {
+            int set = u32(dex, off + 4 + i * 4);
+            if (set == 0 || set == 0xFFFFFFFF) out.add("");
+            else out.add(renderAnnotSet(dex, t, set, pad));
+        }
+        return out;
+    }
+
+    /** Un try: {inicio, fin, offset de handler relativo a la lista}. */
+    private static class TryItem {
+        int start;
+        int end;
+        int handlerOff;
+    }
+
+    /**
+     * Parsea tries + base de handlers de un code_item. Nunca lanza:
+     * corrupto → lista vacía.
+     */
+    private static List<TryItem> parseTries(byte[] dex, int codeOff, int insnsSize,
+                                            int[] handlersBase) {
+        List<TryItem> out = new ArrayList<>();
+        try {
+            check(dex, codeOff, 16);
+            int triesSize = u16(dex, codeOff + 6);
+            if (triesSize <= 0 || triesSize > 10000) return out;
+            long to = (long) codeOff + 16 + (long) insnsSize * 2;
+            to = (to + 3) & ~3L;
+            if (to > Integer.MAX_VALUE - 8) return out;
+            int triesOff = (int) to;
+            check(dex, triesOff, triesSize * 8);
+            for (int i = 0; i < triesSize; i++) {
+                TryItem ti = new TryItem();
+                ti.start = u32(dex, triesOff + i * 8);
+                int count = u16(dex, triesOff + i * 8 + 4);
+                ti.end = ti.start + count;
+                ti.handlerOff = u16(dex, triesOff + i * 8 + 6);
+                out.add(ti);
+            }
+            handlersBase[0] = triesOff + triesSize * 8;
+        } catch (RuntimeException ignored) {
+            out.clear();
+        }
+        return out;
+    }
+
+    /** Un handler: pares (type_idx, addr) + catch-all (-1 si no hay). */
+    private static class Handler {
+        List<int[]> pairs = new ArrayList<>();
+        int catchAll = -1;
+    }
+
+    /** Parsea un encoded_catch_handler. Puede lanzar si está corrupto. */
+    private static Handler parseHandler(byte[] dex, int p) {
+        Handler h = new Handler();
+        int[] s = readSleb128(dex, p);
+        int size = s[0];
+        p = s[1];
+        int count = size < 0 ? -size : size;
+        if (count < 0 || count > 10000) throw new IllegalArgumentException("handlers inválido");
+        for (int i = 0; i < count; i++) {
+            int[] a = AxmlDecoder.readUleb128(dex, p);
+            int type = a[0];
+            p = a[1];
+            int[] b = AxmlDecoder.readUleb128(dex, p);
+            int addr = b[0];
+            p = b[1];
+            h.pairs.add(new int[]{type, addr});
+        }
+        if (size <= 0) {
+            int[] c = AxmlDecoder.readUleb128(dex, p);
+            h.catchAll = c[0];
+        }
+        return h;
     }
 
     /** Lee un encoded_method. Devuelve {idxDiff, access, codeOff, nextPos}. */
@@ -429,7 +1051,7 @@ public final class SmaliDumper {
 
     /** Emite un método. Devuelve 1 y acumula instrucciones en counts[0]. */
     private static int renderMethod(byte[] dex, Tables t, StringBuilder sb, int mIdx, int acc, int codeOff,
-                                    int[] counts) {
+                                    int[] counts, AnnotDir annots) {
         String cls = "?";
         String name = "?";
         String proto = "()?";
@@ -439,18 +1061,33 @@ public final class SmaliDumper {
             proto = protoString(t, t.mProto[mIdx]);
         }
         sb.append(".method ").append(accessStr(acc, 1)).append(name).append(proto).append('\n');
+        String methodAnn = "";
+        List<String> paramAnns = new ArrayList<>();
+        try {
+            if (annots != null && annots.methods.containsKey(mIdx)) {
+                methodAnn = renderAnnotSet(dex, t, annots.methods.get(mIdx), "    ");
+            }
+            if (annots != null && annots.params.containsKey(mIdx)) {
+                paramAnns = renderParamAnnots(dex, t, annots.params.get(mIdx), "        ");
+            }
+        } catch (RuntimeException e) {
+            sb.append("    # anotaciones de método omitidas\n");
+        }
         if (codeOff != 0) {
             try {
-                counts[0] += renderCode(dex, t, sb, codeOff);
+                counts[0] += renderCode(dex, t, sb, codeOff, methodAnn, paramAnns);
             } catch (RuntimeException e) {
                 sb.append("    # código omitido\n");
             }
+        } else if (!methodAnn.isEmpty()) {
+            sb.append(methodAnn);
         }
         sb.append(".end method\n\n");
         return 1;
     }
 
-    private static int renderCode(byte[] dex, Tables t, StringBuilder sb, int codeOff) {
+    private static int renderCode(byte[] dex, Tables t, StringBuilder sb, int codeOff,
+                                  String methodAnn, List<String> paramAnns) {
         check(dex, codeOff, 16);
         int regs = u16(dex, codeOff);
         int ins = u16(dex, codeOff + 2);
@@ -462,10 +1099,76 @@ public final class SmaliDumper {
         int[] units = new int[n];
         for (int i = 0; i < n; i++) units[i] = u16(dex, codeOff + 16 + i * 2);
         sb.append("    .registers ").append(regs).append('\n');
+        if (methodAnn != null && !methodAnn.isEmpty()) sb.append(methodAnn);
+        if (paramAnns != null) {
+            for (int i = 0; i < paramAnns.size(); i++) {
+                String block = paramAnns.get(i);
+                if (block == null || block.isEmpty()) continue;
+                sb.append("    .param p").append(i).append('\n');
+                sb.append(block);
+                sb.append("    .end param\n");
+            }
+        }
+        // Tries: rangos y handlers; las direcciones se vuelven etiquetas.
+        int[] hb = new int[1];
+        List<TryItem> tries = parseTries(dex, codeOff, insnsSize, hb);
+        List<Handler> tryHandlers = new ArrayList<>();
+        List<String> catchLines = new ArrayList<>();
+        for (TryItem ti : tries) {
+            Handler h = null;
+            if (ti == null || ti.start < 0 || ti.end <= ti.start || ti.end > insnsSize) {
+                catchLines.add("    # try inválido omitido");
+            } else if (ti.end > n) {
+                catchLines.add("    # try@0x" + Integer.toHexString(ti.start)
+                        + " recortado (tope)");
+            } else {
+                try {
+                    h = parseHandler(dex, hb[0] + ti.handlerOff);
+                } catch (RuntimeException e) {
+                    catchLines.add("    # try@0x" + Integer.toHexString(ti.start)
+                            + ": handlers omitidos");
+                    h = null;
+                }
+                if (h != null) {
+                    boolean ok = h.catchAll >= -1 && h.catchAll < n;
+                    for (int[] pr : h.pairs) {
+                        if (pr[1] < 0 || pr[1] >= n) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if (!ok) {
+                        catchLines.add("    # try@0x" + Integer.toHexString(ti.start)
+                                + ": handler fuera de rango");
+                        h = null;
+                    }
+                }
+                if (h != null) {
+                    for (int[] pr : h.pairs) {
+                        catchLines.add("    .catch " + typeAt(t, pr[0]) + " { "
+                                + lbl(ti.start) + " .. " + lbl(ti.end) + " } " + lbl(pr[1]));
+                    }
+                    if (h.catchAll >= 0) {
+                        catchLines.add("    .catchall { " + lbl(ti.start) + " .. " + lbl(ti.end)
+                                + " } " + lbl(h.catchAll));
+                    }
+                }
+            }
+            tryHandlers.add(h);
+        }
         // Pasada 1: tamaños y destinos de salto.
         List<Integer> addrs = new ArrayList<>();
         List<Integer> sizes = new ArrayList<>();
         Map<Integer, Boolean> targets = new LinkedHashMap<>();
+        for (int i = 0; i < tries.size(); i++) {
+            TryItem ti = tries.get(i);
+            Handler h = tryHandlers.get(i);
+            if (ti == null || h == null) continue;
+            if (ti.start >= 0 && ti.start < n) targets.put(ti.start, Boolean.TRUE);
+            if (ti.end >= 0 && ti.end < n) targets.put(ti.end, Boolean.TRUE);
+            for (int[] pr : h.pairs) targets.put(pr[1], Boolean.TRUE);
+            if (h.catchAll >= 0) targets.put(h.catchAll, Boolean.TRUE);
+        }
         int p = 0;
         while (p < n) {
             int op = units[p] & 0xFF;
@@ -495,6 +1198,11 @@ public final class SmaliDumper {
             }
             count++;
         }
+        // Etiquetas al final del código (fin de try == n).
+        for (TryItem ti : tries) {
+            if (ti != null && ti.end == n && ti.end > 0) sb.append(lbl(ti.end)).append('\n');
+        }
+        for (String cl : catchLines) sb.append(cl).append('\n');
         if (insnsSize > n) sb.append("    # ...recortado (tope)\n");
         return count;
     }

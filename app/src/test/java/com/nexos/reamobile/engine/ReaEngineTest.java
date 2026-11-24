@@ -304,6 +304,37 @@ public class ReaEngineTest {
     }
 
     @Test
+    public void recuperacionIndiceYSeccion() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        r.appClassTotal = 10;
+        for (int i = 0; i < 10; i++) r.appClasses.add("Lcom/x/C" + i + ";");
+        r.totalStrings = 100;
+        r.urlTotal = 4;
+        r.urls.add("https://a.com");
+        r.urls.add("https://b.com");
+        r.secretTotal = 0;
+        r.recArscPresent = true;
+        r.arscStringCount = 50;
+        r.recArscEntries = 20;
+        r.recLayoutTotal = 2;
+        AlfaUi.Screen s = new AlfaUi.Screen();
+        r.alfaScreens.add(s);
+        r.recSoTotal = 0;
+        r.manifestXml = "<manifest/>";
+        r.sigScheme = "v2";
+        // 30*1 + 10*0 + 5*.5 + 10*1 + 10*1 + 10*.5 + 10*1 + 5*1 = 72.5/95 ≈ 76
+        assertEquals(76, ReaEngine.recoveryIndex(r));
+        String txt = r.toText();
+        assertTrue(txt, txt.contains("=== RECUPERACIÓN (índice≈76%) ==="));
+        assertTrue(txt, txt.contains("clases=10/10"));
+        assertTrue(txt, txt.contains("secretos=n/a"));
+        assertTrue(txt, txt.contains("arsc-tabla=20 entradas"));
+        assertEquals(-1, ReaEngine.recoveryIndex(null));
+        String js = r.toJson();
+        assertTrue(js, js.contains("\"recIndex\":76"));
+    }
+
+    @Test
     public void puenteIntel() {
         ReaEngine.ApkReport r = new ReaEngine.ApkReport();
         r.findings.add(new ReaEngine.Finding("red", "2 URL(s)", "una", "DEX"));

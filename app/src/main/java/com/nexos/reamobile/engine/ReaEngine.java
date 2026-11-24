@@ -154,6 +154,12 @@ public final class ReaEngine {
         public Set<String> manifestClasses = new LinkedHashSet<>();
         public List<String> limitations = new ArrayList<>();
         public List<String> unknowns = new ArrayList<>();
+        /** RECUPERACIÓN: totales para el índice (0 = no aplica). */
+        public int recLayoutTotal;
+        public int recSoTotal;
+        public int recArscTypes;
+        public int recArscEntries;
+        public boolean recArscPresent;
         public String error;
 
         private void finding(String section, String title, String detail, String evidence) {
@@ -506,6 +512,38 @@ public final class ReaEngine {
                     sb.append("  ").append(AlfaCorr.summarize(chains.get(i))).append('\n');
                 }
             }
+            int recIdx = -1;
+            try {
+                recIdx = recoveryIndex(this);
+            } catch (Throwable ignored) {
+            }
+            sb.append("\n=== RECUPERACIÓN (índice≈")
+                    .append(recIdx < 0 ? "?" : recIdx + "%").append(") ===\n");
+            if (recIdx < 0) {
+                sb.append("  (sin datos)\n");
+            } else {
+                appendRecLine(sb, "clases", appClasses.size(), appClassTotal);
+                int pairs = 0;
+                try {
+                    pairs = stringRefs.pairCount();
+                } catch (Throwable ignored) {
+                }
+                appendRecLine(sb, "strings", pairs, totalStrings);
+                appendRecLine(sb, "urls", urls.size(), urlTotal);
+                appendRecLine(sb, "secretos", secretHits.size(), secretTotal);
+                if (recArscPresent) {
+                    int kept = arscTruncated ? ArscStrings.MAX_STRINGS : arscStringCount;
+                    appendRecLine(sb, "arsc-str", kept, arscStringCount);
+                    sb.append("  arsc-tabla=").append(recArscEntries).append(" entradas, ")
+                            .append(recArscTypes).append(" tipos\n");
+                }
+                appendRecLine(sb, "layouts", alfaScreens.size(), recLayoutTotal);
+                appendRecLine(sb, "nativas", alfaElfs.size(), recSoTotal);
+                sb.append("  manifest=").append(manifestXml.isEmpty() ? "no" : "sí")
+                        .append(" firma=")
+                        .append((!sigScheme.isEmpty() || !certSubjects.isEmpty() || apkSigBlock)
+                                ? "sí" : "no").append('\n');
+            }
             return sb.toString();
         }
 
@@ -665,6 +703,12 @@ public final class ReaEngine {
             } catch (Throwable ignored) {
             }
             jsonStrList(sb, "corrChains", corrStrs);
+            int recIdx = -1;
+            try {
+                recIdx = recoveryIndex(this);
+            } catch (Throwable ignored) {
+            }
+            sb.append(",\"recIndex\":").append(recIdx);
             SearchPlan.Plan plan = SearchPlan.build(this);
             jsonField(sb, "profile", plan.profile.label, false);
             sb.append(",\"coverage\":{");
@@ -785,8 +829,10 @@ public final class ReaEngine {
                         certNames.add(name);
                     else if (name.startsWith("res/")) {
                         r.resCount++;
-                        if (name.startsWith("res/layout") && name.endsWith(".xml")
-                                && layoutNames.size() < MAX_LAYOUTS) layoutNames.add(name);
+                        if (name.startsWith("res/layout") && name.endsWith(".xml")) {
+                            r.recLayoutTotal++;
+                            if (layoutNames.size() < MAX_LAYOUTS) layoutNames.add(name);
+                        }
                     }
                     else if (name.startsWith("assets/")) r.assetCount++;
                     detectFrameworkByName(name, frameworks);
@@ -885,6 +931,7 @@ public final class ReaEngine {
 
                 // ARSC.
                 if (arscBytes != null) {
+                    r.recArscPresent = true;
                     ArscStrings.ArscInfo ai = ArscStrings.parse(arscBytes);
                     if (ai.error != null) {
                         r.dexNotes.add("resources.arsc: " + ai.error);
@@ -894,9 +941,18 @@ public final class ReaEngine {
                         scanStrings(ai.strings, urlSet, ipSet, emailSet, secretSet, secretHighSet, counters,
                                 r.urlOrigin, "arsc");
                     }
+                    try {
+                        ArscTable.TableInfo ti = ArscTable.parse(arscBytes, 0);
+                        if (ti.error == null) {
+                            r.recArscTypes = ti.typeCount;
+                            r.recArscEntries = ti.entryTotal;
+                        }
+                    } catch (Throwable ignored) {
+                    }
                 }
 
                 // Nativas: inventario + arquitectura por cabecera ELF + etiqueta conocida.
+                r.recSoTotal = soNames.size();
                 int elfParsed = 0;
                 for (String so : soNames) {
                     ZipEntry e = zip.getEntry(so);
@@ -1536,6 +1592,7 @@ public final class ReaEngine {
     private static final long MAX_COPY_ENTRY = 80L * 1024 * 1024;
     private static final long MAX_ZIP_TOTAL = 250L * 1024 * 1024;
     private static final int MAX_STRING_LINES = 30000;
+    private static final long MAX_SMALI_STREAM = 150L * 1024 * 1024;
 
     /** Extrae el árbol del APK + smali + informe a un ZIP. Nunca lanza. */
     public static ExtractResult extractToZip(File apk, File outZip) {
@@ -1565,8 +1622,8 @@ public final class ReaEngine {
                     ZipEntry e = en0.nextElement();
                     if (!e.isDirectory() && e.getName().matches("classes\\d*\\.dex")) dexNames.add(e.getName());
                 }
-                // Streaming por dex: volcar y soltar bytes (sin retener todos).
-                SmaliDumper.StreamDump smaliDump = new SmaliDumper.StreamDump(pkgSlash);
+                // Pasada 1 (barata): prefijos para elegir paquete propio + strings.
+                Map<String, Integer> prefixCounts = new LinkedHashMap<>();
                 List<String> dexStrings = new ArrayList<>();
                 for (String dn : dexNames) {
                     ZipEntry e = zip.getEntry(dn);
@@ -1575,7 +1632,7 @@ public final class ReaEngine {
                         r.notes.add(dn + ": omitido por tamaño");
                         continue;
                     }
-                    if (!smaliDump.r.truncated) smaliDump.addDex(b);
+                    SmaliDumper.countPrefixes(b, prefixCounts);
                     DexParser.DexInfo di = DexParser.parse(b, "dex");
                     if (di.error == null) {
                         for (String s : di.strings) {
@@ -1585,44 +1642,22 @@ public final class ReaEngine {
                     }
                     b = null;
                 }
-                SmaliDumper.DumpResult smali = smaliDump.r;
-                String alt = smaliDump.altPrefix();
-                if (alt != null) {
-                    smali.notes.add("sin clases bajo " + pkgSlash + "; reintento con " + alt);
-                    SmaliDumper.StreamDump sd2 = new SmaliDumper.StreamDump(alt);
-                    for (String dn : dexNames) {
-                        ZipEntry e = zip.getEntry(dn);
-                        byte[] b = e == null ? null : readEntry(zip, e, MAX_DEX_BYTES);
-                        if (b == null) continue;
-                        sd2.addDex(b);
-                        b = null;
-                        if (sd2.r.truncated) break;
-                    }
-                    smali.classes = sd2.r.classes;
-                    smali.classSummaries = sd2.r.classSummaries;
-                    smali.bytes = sd2.r.bytes;
-                    smali.truncated = sd2.r.truncated;
-                    smali.notes.addAll(sd2.r.notes);
+                String ownSlash = SmaliDumper.pickOwnPrefix(prefixCounts, pkgSlash);
+                if (!ownSlash.equals(pkgSlash) && !ownSlash.isEmpty()) {
+                    r.notes.add("smali: sin clases bajo " + pkgSlash + "; resúmenes con "
+                            + ownSlash);
                 }
-                r.smaliClasses = smali.classes.size();
-                r.notes.addAll(smali.notes);
-                if (smali.truncated) r.notes.add("smali: recortado por topes");
+                final Set<String> bootWant = new LinkedHashSet<>();
                 ManifestChecks.Result bootMc = ManifestChecks.check(manifestXml, null);
                 for (String b : bootMc.bootReceivers) {
                     String clsName = b.split(" ")[0];
                     String fq = clsName.startsWith(".") && !"?".equals(pkg) ? pkg + clsName : clsName;
                     if (fq.startsWith("?")) continue;
-                    String want = "smali/" + fq.replace('.', '/') + ".smali";
-                    for (SmaliDumper.SmaliClass sc : smali.classes) {
-                        if (want.equals(sc.path) && (sc.text.contains("startActivity")
-                                || sc.text.contains("getLaunchIntentForPackage"))) {
-                            r.notes.add("autoarranque: " + fq + " lanza actividad (smali)");
-                            break;
-                        }
-                    }
+                    bootWant.add("smali/" + fq.replace('.', '/') + ".smali");
                 }
                 List<String> arscStrings = new ArrayList<>();
                 int arscTotal = 0;
+                ArscTable.TableInfo arscTable = null;
                 ZipEntry arsc = zip.getEntry("resources.arsc");
                 if (arsc != null) {
                     byte[] ab = readEntry(zip, arsc, 100 * 1024 * 1024);
@@ -1632,10 +1667,17 @@ public final class ReaEngine {
                             arscTotal = ai.stringCount;
                             arscStrings.addAll(ai.strings);
                         }
+                        try {
+                            arscTable = ArscTable.parse(ab, 30000);
+                        } catch (Throwable ignored) {
+                            arscTable = null;
+                        }
                     }
                 }
                 ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(outZip));
                 long total = 0;
+                int layoutTotal = 0;
+                int layoutOk = 0;
                 try {
                     StringBuilder tree = new StringBuilder();
                     Enumeration<? extends ZipEntry> en = zip.entries();
@@ -1662,26 +1704,96 @@ public final class ReaEngine {
                         zos.closeEntry();
                         total += data.length;
                         r.copiedEntries++;
+                        if (isLayoutXml(name)) {
+                            layoutTotal++;
+                            if (layoutOk < MAX_LAYOUTS && data.length <= MAX_LAYOUT_BYTES) {
+                                try {
+                                    String xml = AxmlDecoder.decode(data);
+                                    if (xml != null && !xml.isEmpty()) {
+                                        putText(zos, "rea/layouts/" + name, xml);
+                                        layoutOk++;
+                                    }
+                                } catch (Throwable ignored) {
+                                }
+                            }
+                        }
+                    }
+                    if (layoutTotal > 0) {
+                        r.notes.add("layouts: " + layoutOk + "/" + layoutTotal
+                                + " decodificados");
                     }
                     putText(zos, "rea/manifest.xml", manifestXml.isEmpty() ? "(no decodificado)\n" : manifestXml);
                     putText(zos, "rea/ARBOL.txt", tree.toString());
-                    StringBuilder cls = new StringBuilder();
-                    for (String s : smali.classSummaries) cls.append(s).append('\n');
-                    putText(zos, "rea/CLASES_PROPIAS.txt", cls.length() == 0 ? "(sin clases)\n" : cls.toString());
-                    for (SmaliDumper.SmaliClass sc : smali.classes) {
-                        zos.putNextEntry(new ZipEntry("rea/" + sc.path));
-                        zos.write(sc.text.getBytes("UTF-8"));
-                        zos.closeEntry();
+                    // Pasada 2: volcado TOTAL al ZIP en streaming (sin retener).
+                    final ZipOutputStream zosF = zos;
+                    final long[] smaliBytes = new long[1];
+                    SmaliDumper.ClassSink sink = new SmaliDumper.ClassSink() {
+                        public void accept(String path, String text) {
+                            try {
+                                if (smaliBytes[0] + text.length() > MAX_SMALI_STREAM) {
+                                    throw new SmaliDumper.Stop("tope 150MB en ZIP");
+                                }
+                                byte[] data = text.getBytes("UTF-8");
+                                zosF.putNextEntry(new ZipEntry("rea/" + path));
+                                zosF.write(data);
+                                zosF.closeEntry();
+                                smaliBytes[0] += text.length();
+                                if (bootWant.contains(path)
+                                        && (text.contains("startActivity")
+                                        || text.contains("getLaunchIntentForPackage"))) {
+                                    r.notes.add("autoarranque: "
+                                            + path.replace('/', '.').replace("smali.", "")
+                                            .replace(".smali", "")
+                                            + " lanza actividad (smali)");
+                                }
+                            } catch (SmaliDumper.Stop s) {
+                                throw s;
+                            } catch (Exception e) {
+                                throw new SmaliDumper.Stop("zip: " + e.getMessage());
+                            }
+                        }
+                    };
+                    SmaliDumper.FullDump full = new SmaliDumper.FullDump(ownSlash, sink);
+                    for (String dn : dexNames) {
+                        ZipEntry de = zip.getEntry(dn);
+                        byte[] db = de == null ? null : readEntry(zip, de, MAX_DEX_BYTES);
+                        if (db == null) continue;
+                        full.addDex(db);
+                        db = null;
+                        if (full.r.truncated) break;
                     }
-                    // Libera smali ya volcado antes de JADX (hasta 40MB).
-                    smali.classes.clear();
-                    smali.classSummaries.clear();
+                    StringBuilder cls = new StringBuilder();
+                    for (String s : full.r.classSummaries) cls.append(s).append('\n');
+                    putText(zos, "rea/CLASES_PROPIAS.txt", cls.length() == 0 ? "(sin clases)\n" : cls.toString());
+                    r.smaliClasses = full.r.dumped;
+                    r.notes.add("smali: " + full.r.dumped + "/" + full.r.scanned
+                            + " clases, propias=" + full.r.ownMatched);
+                    r.notes.addAll(full.r.notes);
+                    full.r.classSummaries.clear();
                     StringBuilder ds = new StringBuilder();
                     for (String s : dexStrings) ds.append(s.replace('\n', ' ')).append('\n');
                     putText(zos, "rea/INDICIOS_strings_dex.txt", ds.toString());
                     StringBuilder as = new StringBuilder("total=" + arscTotal + "\n");
                     for (String s : arscStrings) as.append(s.replace('\n', ' ')).append('\n');
                     putText(zos, "rea/INDICIOS_strings_arsc.txt", as.toString());
+                    if (arscTable != null && arscTable.error == null) {
+                        StringBuilder tb = new StringBuilder();
+                        tb.append("paquetes=").append(arscTable.packageCount).append('\n');
+                        tb.append("tipos=").append(arscTable.typeCount).append('\n');
+                        tb.append("configs=").append(arscTable.configChunks).append('\n');
+                        tb.append("entradas=").append(arscTable.entryTotal).append('\n');
+                        for (Map.Entry<String, String> me : arscTable.idToName.entrySet()) {
+                            tb.append(me.getKey()).append(" = ").append(me.getValue())
+                                    .append('\n');
+                        }
+                        putText(zos, "rea/RECURSOS_ids.txt", tb.toString());
+                        r.notes.add("recursos: " + arscTable.idToName.size() + "/"
+                                + arscTable.entryTotal + " ids, tipos="
+                                + arscTable.typeCount);
+                        if (arscTable.truncated) r.notes.add("recursos: mapa recortado");
+                    } else if (arsc != null) {
+                        r.notes.add("recursos: tabla no decodificada");
+                    }
                     List<String> slashes = new ArrayList<>();
                     if (!"?".equals(pkg)) slashes.add(pkgSlash);
                     // Libera strings ya volcados antes de cargar JADX.
@@ -1744,6 +1856,18 @@ public final class ReaEngine {
         return r;
     }
 
+    /** true si es un XML de recurso decodificable (layout, xml, navigation...). */
+    private static boolean isLayoutXml(String name) {
+        try {
+            if (name == null || !name.endsWith(".xml")) return false;
+            return name.startsWith("res/layout") || name.startsWith("res/xml")
+                    || name.startsWith("res/navigation") || name.startsWith("res/menu")
+                    || name.startsWith("res/drawable/") || name.startsWith("res/values/");
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     private static void putText(ZipOutputStream zos, String name, String text) throws Exception {
         zos.putNextEntry(new ZipEntry(name));
         zos.write(text.getBytes("UTF-8"));
@@ -1804,6 +1928,86 @@ public final class ReaEngine {
             return desc.substring(1, b);
         } catch (Throwable t) {
             return "otros";
+        }
+    }
+
+    /** Fracción 0..1 (0 si total<=0). Nunca lanza. */
+    private static double recFrac(int kept, int total) {
+        try {
+            if (total <= 0 || kept <= 0) return 0;
+            double f = kept / (double) total;
+            return f > 1 ? 1 : f;
+        } catch (Throwable ignored) {
+            return 0;
+        }
+    }
+
+    /**
+     * Índice de recuperación 0..100 (-1 sin datos): media ponderada de lo
+     * retenido frente al total por artefacto; lo no aplicable no pondera.
+     * Pesos en docs/RECUPERACION.md. Nunca lanza.
+     */
+    static int recoveryIndex(ApkReport r) {
+        try {
+            if (r == null) return -1;
+            double num = 0;
+            double den = 0;
+            if (r.appClassTotal > 0) {
+                num += 30 * recFrac(r.appClasses.size(), r.appClassTotal);
+                den += 30;
+            }
+            if (r.totalStrings > 0) {
+                int pairs = 0;
+                try {
+                    pairs = r.stringRefs.pairCount();
+                } catch (Throwable ignored) {
+                }
+                num += 10 * recFrac(pairs, r.totalStrings);
+                den += 10;
+            }
+            if (r.urlTotal > 0) {
+                num += 5 * recFrac(r.urls.size(), r.urlTotal);
+                den += 5;
+            }
+            if (r.secretTotal > 0) {
+                num += 5 * recFrac(r.secretHits.size(), r.secretTotal);
+                den += 5;
+            }
+            if (r.recArscPresent) {
+                int kept = r.arscTruncated ? ArscStrings.MAX_STRINGS : r.arscStringCount;
+                num += 10 * recFrac(kept, Math.max(1, r.arscStringCount));
+                den += 10;
+                num += 10 * (r.recArscEntries > 0 ? 1 : 0);
+                den += 10;
+            }
+            if (r.recLayoutTotal > 0) {
+                num += 10 * recFrac(r.alfaScreens.size(), r.recLayoutTotal);
+                den += 10;
+            }
+            if (r.recSoTotal > 0) {
+                num += 5 * recFrac(r.alfaElfs.size(), r.recSoTotal);
+                den += 5;
+            }
+            num += 10 * (r.manifestXml.isEmpty() ? 0 : 1);
+            den += 10;
+            boolean firma = !r.sigScheme.isEmpty() || !r.certSubjects.isEmpty() || r.apkSigBlock;
+            num += 5 * (firma ? 1 : 0);
+            den += 5;
+            if (den <= 0) return -1;
+            return (int) Math.round(100 * num / den);
+        } catch (Throwable ignored) {
+            return -1;
+        }
+    }
+
+    /** Línea "  nombre=kept/total" (o "n/a"). Nunca lanza. */
+    private static void appendRecLine(StringBuilder sb, String name, int kept, int total) {
+        try {
+            sb.append("  ").append(name).append('=');
+            if (total <= 0) sb.append("n/a");
+            else sb.append(kept).append('/').append(total);
+            sb.append('\n');
+        } catch (Throwable ignored) {
         }
     }
 
