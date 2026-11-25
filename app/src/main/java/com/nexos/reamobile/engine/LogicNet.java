@@ -155,10 +155,10 @@ public final class LogicNet {
             int depth = maxDepth <= 0 ? DEFAULT_DEPTH : maxDepth;
             int cap = maxChains <= 0 ? DEFAULT_MAX_CHAINS : maxChains;
             List<String> targets = new ArrayList<>();
-            Set<String> seenT = new HashSet<>();
-            for (RefGraph.RefEdge e : g.edges()) {
-                if (e == null || e.callee == null || !seenT.add(e.callee)) continue;
-                if (target.equals(e.callee)) targets.add(e.callee);
+            if (!g.callersOf(target).isEmpty()) {
+                targets.add(target);
+            } else if (g.containsMethod(target) && isEntryName(simpleName(target))) {
+                targets.add(target); // solo-llamador que es entrada: cadena trivial.
             }
             Search st = new Search();
             st.cap = cap;
@@ -246,7 +246,7 @@ public final class LogicNet {
                 String key;
                 if (c.size() > 1) {
                     StringBuilder k = new StringBuilder();
-                    for (int i = 1; i < c.size(); i++) k.append(' ').append(c.get(i));
+                    for (int i = 1; i < c.size(); i++) k.append('\0').append(c.get(i));
                     key = k.toString();
                 } else {
                     key = c.get(0);

@@ -75,4 +75,13 @@ public class PhantomNamesTest {
         assertTrue(lines.get(0), lines.get(0).contains("shuffle state"));
         assertTrue(PhantomNames.describe(null, null, null).isEmpty());
     }
+
+    @Test
+    public void ofuscacionSigueB3() {
+        assertTrue(PhantomNames.isObfuscated("Lagr;"));
+        assertTrue(PhantomNames.isObfuscated("Lcom/x/aftz;"));
+        assertTrue(!PhantomNames.isObfuscated("Lcom/x/Clean;"));
+        assertTrue(!PhantomNames.isObfuscated("Lcom/x/MusicActivity;"));
+        assertTrue(!PhantomNames.isObfuscated(null));
+    }
 }

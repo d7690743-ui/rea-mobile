@@ -240,14 +240,36 @@ public final class PhantomMetric {
         return PhantomGroup.FALTA;
     }
 
+    /** contains() con terminador: ";->foo" no casa con ";->foo2". Nunca lanza. */
+    static boolean containsToken(String hay, String needle) {
+        try {
+            if (hay == null || needle == null || needle.isEmpty()) return false;
+            int from = 0;
+            while (true) {
+                int i = hay.indexOf(needle, from);
+                if (i < 0) return false;
+                int end = i + needle.length();
+                if (end >= hay.length() || !isIdentChar(hay.charAt(end))) return true;
+                from = end;
+            }
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static boolean isIdentChar(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9') || c == '_' || c == '$';
+    }
+
     private static boolean mentions(String detail, String evidence,
                                     PhantomGroup.FuncGroup g) {
         try {
             if (g.methodSample != null) {
                 for (String m : g.methodSample) {
                     if (m == null) continue;
-                    if (detail != null && detail.contains(m)) return true;
-                    if (evidence != null && evidence.contains(m)) return true;
+                    if (containsToken(detail, m)) return true;
+                    if (containsToken(evidence, m)) return true;
                 }
             }
             if (g.classSample != null) {

@@ -124,6 +124,26 @@ public final class ReachConsts {
      * Analiza un método. IR nula, con error o sin bloques → vacío.
      * Nunca null ni lanza.
      */
+    /**
+     * analyze() memoizado por instancia de IR (analyze es puro: mismo
+     * resultado). cache null = sin memoizar. Nunca null ni lanza.
+     */
+    static ConstResult analyzeCached(IrBuilder.MethodIr ir,
+                                     Map<IrBuilder.MethodIr, ConstResult> cache) {
+        try {
+            if (ir == null) return new ConstResult();
+            if (cache != null) {
+                ConstResult hit = cache.get(ir);
+                if (hit != null) return hit;
+            }
+            ConstResult r = analyze(ir);
+            if (cache != null && r != null) cache.put(ir, r);
+            return r;
+        } catch (Throwable ignored) {
+            return analyze(ir);
+        }
+    }
+
     public static ConstResult analyze(IrBuilder.MethodIr ir) {
         ConstResult r = new ConstResult();
         try {
@@ -324,9 +344,10 @@ public final class ReachConsts {
     /** Valor que define la instrucción. Nunca null ni lanza. */
     private static Const transfer(int op, IrBuilder.Insn in, int[] regs, Const[] st) {
         try {
-            if (op >= 0x12 && op <= 0x19) {
+            if (op >= 0x12 && op <= 0x15) {
                 return in.hasLit ? Const.lit(in.lit) : Const.nac();
             }
+            if (op >= 0x16 && op <= 0x19) return Const.nac(); // wide 64b: NAC documentado.
             if (op == 0x1A || op == 0x1B) return Const.str(in.refIdx);
             if (op >= 0x01 && op <= 0x09) {
                 return regs.length >= 2 ? Const.copy(get(st, regs[1])) : Const.nac();
@@ -367,7 +388,16 @@ public final class ReachConsts {
         if (regs.length < 2 || !in.hasLit) return Const.nac();
         Const a = get(st, regs[1]);
         if (a.kind != Kind.LIT) return Const.nac();
-        Long v = intBinop(op - 0x40, a.lit, in.lit);
+        if (op == 0xD1 || op == 0xD9) { // rsub: lit - reg (no reg - lit).
+            Long v = intBinop(0x91, in.lit, a.lit);
+            return v == null ? Const.nac() : Const.lit(v);
+        }
+        int base;
+        if (op >= 0xD0 && op <= 0xD7) base = op - 0x40; // lit16 → 0x90..0x97
+        else if (op >= 0xD8 && op <= 0xDF) base = op - 0x48; // lit8 → 0x90..0x97
+        else if (op >= 0xE0 && op <= 0xE2) base = op - 0x48; // shl/shr/ushr → 0x98..0x9A
+        else return Const.nac();
+        Long v = intBinop(base, a.lit, in.lit);
         return v == null ? Const.nac() : Const.lit(v);
     }
 

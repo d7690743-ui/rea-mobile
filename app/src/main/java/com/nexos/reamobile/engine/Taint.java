@@ -278,53 +278,56 @@ public final class Taint {
             Map<String, InterProc.Summary> sums =
                     InterProc.summarize(capped, graph, matcherFor(supers));
             Set<String> recheck = new LinkedHashSet<>();
-            for (RefGraph.RefEdge e : graph.edges()) {
-                if (r.flows.size() >= MAX_FLOWS) {
-                    r.truncated = true;
-                    return;
-                }
-                if (e == null || e.caller == null || e.callee == null) continue;
-                IrBuilder.MethodIr callerIr = capped.get(e.caller);
-                InterProc.Summary calleeSum = sums.get(e.callee);
-                if (callerIr == null || calleeSum == null) continue;
-                Map<Integer, String> callerT = tainted.get(e.caller);
+            for (Map.Entry<String, IrBuilder.MethodIr> cen : capped.entrySet()) {
+                if (cen.getKey() == null || cen.getValue() == null) continue;
+                Map<Integer, String> callerT = tainted.get(cen.getKey());
                 if (callerT == null || callerT.isEmpty()) continue;
-                int[] args = invokeArgsAt(callerIr, e.pos);
-                if (args == null) continue;
-                String src = null;
-                for (int a : args) {
-                    src = callerT.get(a);
-                    if (src != null) break;
-                }
-                if (src == null) continue;
-                for (InterProc.SinkHit h : calleeSum.sinksFromEntry) {
-                    if (h == null) continue;
-                    Flow f = new Flow();
-                    f.source = src;
-                    f.sink = h.sink + "@+" + h.addr;
-                    f.method = e.caller;
-                    f.chain.add(e.caller);
-                    f.chain.add(e.callee);
-                    f.evidence = "arg marcado en " + e.caller + "@+" + e.pos
-                            + " ~> " + h.sink + " en " + e.callee + "@+" + h.addr;
-                    f.inter = true;
-                    addFlowObj(r, f);
-                }
-                if (calleeSum.retMayCarryEntry) {
-                    DefUse.Chains chains = chainsMap.get(e.caller);
-                    if (chains == null) continue;
-                    boolean added = false;
-                    for (DefUse.DefSite d : chains.defs) {
-                        if (d != null && d.resultOf == e.pos && !callerT.containsKey(d.reg)) {
-                            callerT.put(d.reg, src + " ~> " + e.callee);
-                            added = true;
-                        }
+                Map<Integer, int[]> argsByAddr = invokeArgsByAddr(cen.getValue());
+                for (RefGraph.RefEdge e : graph.edgesFromKey(cen.getKey())) {
+                    if (r.flows.size() >= MAX_FLOWS) {
+                        r.truncated = true;
+                        return;
                     }
-                    if (added) {
-                        Map<Integer, String> grown = propagateWithSrc(chains, callerT);
-                        callerT.clear();
-                        callerT.putAll(grown);
-                        recheck.add(e.caller);
+                    if (e == null || e.caller == null || e.callee == null) continue;
+                    InterProc.Summary calleeSum = sums.get(e.callee);
+                    if (calleeSum == null) continue;
+                    int[] args = argsByAddr.get(e.pos);
+                    if (args == null) continue;
+                    String src = null;
+                    for (int a : args) {
+                        src = callerT.get(a);
+                        if (src != null) break;
+                    }
+                    if (src == null) continue;
+                    for (InterProc.SinkHit h : calleeSum.sinksFromEntry) {
+                        if (h == null) continue;
+                        Flow f = new Flow();
+                        f.source = src;
+                        f.sink = h.sink + "@+" + h.addr;
+                        f.method = e.caller;
+                        f.chain.add(e.caller);
+                        f.chain.add(e.callee);
+                        f.evidence = "arg marcado en " + e.caller + "@+" + e.pos
+                                + " ~> " + h.sink + " en " + e.callee + "@+" + h.addr;
+                        f.inter = true;
+                        addFlowObj(r, f);
+                    }
+                    if (calleeSum.retMayCarryEntry) {
+                        DefUse.Chains chains = chainsMap.get(e.caller);
+                        if (chains == null) continue;
+                        boolean added = false;
+                        for (DefUse.DefSite d : chains.defs) {
+                            if (d != null && d.resultOf == e.pos && !callerT.containsKey(d.reg)) {
+                                callerT.put(d.reg, src + " ~> " + e.callee);
+                                added = true;
+                            }
+                        }
+                        if (added) {
+                            Map<Integer, String> grown = propagateWithSrc(chains, callerT);
+                            callerT.clear();
+                            callerT.putAll(grown);
+                            recheck.add(e.caller);
+                        }
                     }
                 }
             }
@@ -346,19 +349,22 @@ public final class Taint {
         }
     }
 
-    private static int[] invokeArgsAt(IrBuilder.MethodIr ir, int pos) {
+    /** Mapa addr→args de invoke de un método (una pasada; evita re-escanear por arista). */
+    private static Map<Integer, int[]> invokeArgsByAddr(IrBuilder.MethodIr ir) {
+        Map<Integer, int[]> out = new LinkedHashMap<>();
         try {
+            if (ir == null || ir.blocks == null) return out;
             for (IrBuilder.Block b : ir.blocks) {
                 if (b == null) continue;
                 for (IrBuilder.Insn in : b.insns) {
-                    if (in != null && in.addr == pos && DefUse.isInvoke(in.op)) {
-                        return in.regs == null ? new int[0] : in.regs;
+                    if (in != null && DefUse.isInvoke(in.op) && !out.containsKey(in.addr)) {
+                        out.put(in.addr, in.regs == null ? new int[0] : in.regs);
                     }
                 }
             }
         } catch (Throwable ignored) {
         }
-        return null;
+        return out;
     }
 
     private static void addFlow(TaintResult r, String src, String sink, String method,

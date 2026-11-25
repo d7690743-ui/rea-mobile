@@ -121,4 +121,14 @@ public class PhantomMetricTest {
         assertEquals(PhantomGroup.OK, fg.states[6]);
         assertEquals(PhantomGroup.OK, fg.states[3]);
     }
+
+    @Test
+    public void mencionExigeTerminador() {
+        assertTrue(PhantomMetric.containsToken("usa Lcom/a;->foo en detalle", "Lcom/a;->foo"));
+        assertTrue(!PhantomMetric.containsToken("usa Lcom/a;->foo2 en detalle", "Lcom/a;->foo"));
+        assertTrue(PhantomMetric.containsToken("x(\"Lcom/a;->foo\")", "Lcom/a;->foo"));
+        assertTrue(PhantomMetric.containsToken("fin Lcom/a;->foo", "Lcom/a;->foo"));
+        assertTrue(!PhantomMetric.containsToken(null, "Lcom/a;->foo"));
+        assertTrue(!PhantomMetric.containsToken("abc", ""));
+    }
 }

@@ -21,6 +21,8 @@ public final class StringRefs {
     public static final int MAX_PAIRS = 20000;
 
     private final Map<String, Set<String>> users = new LinkedHashMap<>();
+    /** T9: índice inverso método → literales (evita el barrido por llamada). */
+    private final Map<String, Set<String>> byUser = new LinkedHashMap<>();
     private final int maxPairs;
     private int pairs;
     private int dropped;
@@ -70,6 +72,12 @@ public final class StringRefs {
                 users.put(value, set);
             }
             set.add(user);
+            Set<String> inv = byUser.get(user);
+            if (inv == null) {
+                inv = new LinkedHashSet<>();
+                byUser.put(user, inv);
+            }
+            inv.add(value);
             pairs++;
             return true;
         } catch (Throwable ignored) {
@@ -154,17 +162,18 @@ public final class StringRefs {
 
     /**
      * Literales que carga un método (índice inverso acotado para PHANTOM).
-     * Recorre el mapa una vez; tope cap. Nunca lanza.
+     * Orden de primer uso por el método; tope cap. Nunca lanza.
      */
     public List<String> literalsOf(String method, int cap) {
         List<String> out = new ArrayList<>();
         try {
             if (method == null || method.isEmpty()) return out;
             int lim = cap <= 0 ? 50 : Math.min(cap, 500);
-            for (Map.Entry<String, Set<String>> e : users.entrySet()) {
+            Set<String> set = byUser.get(method);
+            if (set == null) return out;
+            for (String v : set) {
                 if (out.size() >= lim) break;
-                if (e.getKey() == null || e.getValue() == null) continue;
-                if (e.getValue().contains(method)) out.add(e.getKey());
+                if (v != null) out.add(v);
             }
         } catch (Throwable ignored) {
         }

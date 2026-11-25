@@ -18,6 +18,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Enumeration;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -194,6 +195,17 @@ public final class ReaEngine {
             }
             return flowCache;
         }
+
+        /** Constantes por IR (compartida computeFlow↔PHANTOM; analyze es puro). */
+        private Map<IrBuilder.MethodIr, ReachConsts.ConstResult> constCache;
+
+        Map<IrBuilder.MethodIr, ReachConsts.ConstResult> constCache() {
+            if (constCache == null) constCache = new IdentityHashMap<>();
+            return constCache;
+        }
+
+        /** Enlaces JNI memoizados (summarizeAlfaJni). Null = sin computar. */
+        private List<AlfaJni.JniLink> jniCache;
 
         private void finding(String section, String title, String detail, String evidence) {
             findings.add(new Finding(section, title, detail, evidence));
@@ -2472,7 +2484,8 @@ public final class ReaEngine {
                     s.defs += chains.defs.size();
                     s.uses += chains.uses.size();
                     if (chains.truncated) s.truncated = true;
-                    ReachConsts.ConstResult cr = ReachConsts.analyze(en.getValue());
+                    ReachConsts.ConstResult cr =
+                            ReachConsts.analyzeCached(en.getValue(), r.constCache());
                     if (cr.truncated) s.truncated = true;
                     for (ReachConsts.CallConst cc : cr.callConsts) {
                         if (cc == null || s.consts.size() >= 50) {
@@ -2522,6 +2535,7 @@ public final class ReaEngine {
         List<AlfaJni.JniLink> out = new ArrayList<>();
         try {
             if (r == null || r.alfaElfs == null || r.alfaElfs.isEmpty()) return out;
+            if (r.jniCache != null) return r.jniCache;
             List<String> syms = new ArrayList<>();
             for (AlfaElf.ElfInfo e : r.alfaElfs) {
                 if (e == null || e.jniExports == null) continue;
@@ -2530,6 +2544,7 @@ public final class ReaEngine {
                 }
             }
             out = AlfaJni.link(syms, r.graph);
+            r.jniCache = out;
         } catch (Throwable ignored) {
         }
         return out;

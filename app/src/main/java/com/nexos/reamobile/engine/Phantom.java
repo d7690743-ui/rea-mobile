@@ -52,7 +52,7 @@ public final class Phantom {
             p.contracts = PhantomNet.contracts(r.urls, r.urlOrigin, r.stringRefs,
                     r.graph, r.manifestPerms, r.callerPerm, r.alfaElfs);
             p.ui = PhantomUi.resolve(r.graph, r.manifestClasses, r.alfaScreens,
-                    r.flowIrs, r.arscIds);
+                    r.flowIrs, r.arscIds, r.constCache());
             p.store = PhantomStore.analyze(r.superMap, r.stringRefs, r.graph);
             p.data = PhantomData.analyze(r.graph, r.stringRefs, r.appClasses);
             p.dynJni = PhantomJni.link(r.alfaElfs, r.graph);
@@ -84,7 +84,7 @@ public final class Phantom {
                 base = null;
             }
             p.taintX = PhantomTaint.extend(r.flowIrs, r.graph, r.superMap,
-                    r.flowDex, r.flowStrings, base);
+                    r.flowDex, r.flowStrings, base, r.constCache());
             p.truncated = (p.ui != null && p.ui.truncated)
                     || (p.store != null && p.store.truncated)
                     || (p.data != null && p.data.truncated)

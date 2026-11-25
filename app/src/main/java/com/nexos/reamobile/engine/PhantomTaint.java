@@ -1,6 +1,7 @@
 package com.nexos.reamobile.engine;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -71,6 +72,17 @@ public final class PhantomTaint {
                                       Map<String, String> flowDex,
                                       Map<String, String> flowStrings,
                                       List<Taint.Flow> baseFlows) {
+        return extend(flowIrs, graph, supers, flowDex, flowStrings, baseFlows,
+                new IdentityHashMap<IrBuilder.MethodIr, ReachConsts.ConstResult>());
+    }
+
+    /** Variante con caché de constantes compartida (PHANTOM). Nunca null ni lanza. */
+    public static TaintXResult extend(Map<String, IrBuilder.MethodIr> flowIrs,
+                                      RefGraph graph, Map<String, String> supers,
+                                      Map<String, String> flowDex,
+                                      Map<String, String> flowStrings,
+                                      List<Taint.Flow> baseFlows,
+                                      Map<IrBuilder.MethodIr, ReachConsts.ConstResult> constCache) {
         TaintXResult r = new TaintXResult();
         try {
             if (flowIrs == null || flowIrs.isEmpty() || graph == null) return r;
@@ -89,7 +101,7 @@ public final class PhantomTaint {
                 }
                 chainFrom(f, graph, supers, r);
             }
-            resolveReflection(flowIrs, graph, flowDex, flowStrings, r);
+            resolveReflection(flowIrs, graph, flowDex, flowStrings, r, constCache);
         } catch (Throwable ignored) {
         }
         return r;
@@ -141,7 +153,8 @@ public final class PhantomTaint {
     private static void resolveReflection(Map<String, IrBuilder.MethodIr> flowIrs,
                                           RefGraph graph, Map<String, String> flowDex,
                                           Map<String, String> flowStrings,
-                                          TaintXResult r) {
+                                          TaintXResult r,
+                                          Map<IrBuilder.MethodIr, ReachConsts.ConstResult> constCache) {
         try {
             int n = 0;
             for (Map.Entry<String, IrBuilder.MethodIr> en : flowIrs.entrySet()) {
@@ -150,7 +163,8 @@ public final class PhantomTaint {
                     r.truncated = true;
                     break;
                 }
-                ReachConsts.ConstResult cr = ReachConsts.analyze(en.getValue());
+                ReachConsts.ConstResult cr =
+                        ReachConsts.analyzeCached(en.getValue(), constCache);
                 if (cr == null || cr.callConsts == null) continue;
                 for (ReachConsts.CallConst cc : cr.callConsts) {
                     if (cc == null || cc.kind != ReachConsts.Kind.STR) continue;

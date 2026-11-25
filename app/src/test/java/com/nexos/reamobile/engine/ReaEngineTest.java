@@ -473,6 +473,13 @@ public class ReaEngineTest {
         assertTrue(r.entryCount <= ReaEngine.MAX_ENTRIES);
     }
 
+    @Test
+    public void cachesPerezosas() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        assertTrue(r.constCache() == r.constCache());
+        assertTrue(ReaEngine.summarizeAlfaJni(r).isEmpty());
+    }
+
     static void le16(ByteArrayOutputStream b, int v) {
         b.write(v & 0xFF);
         b.write((v >> 8) & 0xFF);

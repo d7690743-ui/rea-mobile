@@ -1,6 +1,7 @@
 package com.nexos.reamobile.engine;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -76,6 +77,16 @@ public final class PhantomUi {
                                    List<AlfaUi.Screen> screens,
                                    Map<String, IrBuilder.MethodIr> flowIrs,
                                    Map<String, String> arscIds) {
+        return resolve(graph, manifestClasses, screens, flowIrs, arscIds,
+                new IdentityHashMap<IrBuilder.MethodIr, ReachConsts.ConstResult>());
+    }
+
+    /** Variante con caché de constantes compartida (PHANTOM). Nunca null ni lanza. */
+    public static UiResult resolve(RefGraph graph, Set<String> manifestClasses,
+                                   List<AlfaUi.Screen> screens,
+                                   Map<String, IrBuilder.MethodIr> flowIrs,
+                                   Map<String, String> arscIds,
+                                   Map<IrBuilder.MethodIr, ReachConsts.ConstResult> constCache) {
         UiResult r = new UiResult();
         try {
             if (graph == null) return r;
@@ -111,14 +122,14 @@ public final class PhantomUi {
                     if (en.getValue().dex != null) cv.dex = en.getValue().dex;
                     cv.calleeClass = RefGraph.split(en.getValue().callee)[0];
                 }
-                cv.layoutId = layoutArg(graph, en.getKey(), parts, flowIrs);
+                cv.layoutId = layoutArg(graph, en.getKey(), parts, flowIrs, constCache);
                 if (cv.layoutId.isEmpty()) {
-                    cv.layoutId = layoutViaInflate(graph, en.getKey(), flowIrs);
+                    cv.layoutId = layoutViaInflate(graph, en.getKey(), flowIrs, constCache);
                     cv.viaInflate = !cv.layoutId.isEmpty();
                 }
                 if (cv.layoutId.isEmpty()) {
                     cv.layoutId = layoutApprox(flowIrs == null ? null
-                            : flowIrs.get(en.getKey()));
+                            : flowIrs.get(en.getKey()), constCache);
                     cv.layoutApprox = !cv.layoutId.isEmpty();
                 }
                 if (!cv.layoutId.isEmpty()) {
@@ -162,11 +173,17 @@ public final class PhantomUi {
      */
     static String layoutArg(RefGraph graph, String caller, String[] parts,
                             Map<String, IrBuilder.MethodIr> flowIrs) {
+        return layoutArg(graph, caller, parts, flowIrs, null);
+    }
+
+    static String layoutArg(RefGraph graph, String caller, String[] parts,
+                            Map<String, IrBuilder.MethodIr> flowIrs,
+                            Map<IrBuilder.MethodIr, ReachConsts.ConstResult> constCache) {
         try {
             if (graph == null || caller == null || flowIrs == null) return "";
             IrBuilder.MethodIr ir = flowIrs.get(caller);
             if (ir == null) return "";
-            ReachConsts.ConstResult cr = ReachConsts.analyze(ir);
+            ReachConsts.ConstResult cr = ReachConsts.analyzeCached(ir, constCache);
             if (cr == null || cr.callConsts == null) return "";
             for (ReachConsts.CallConst cc : cr.callConsts) {
                 if (cc == null || cc.kind != ReachConsts.Kind.LIT) continue;
@@ -189,11 +206,17 @@ public final class PhantomUi {
      */
     static String layoutViaInflate(RefGraph graph, String caller,
                                    Map<String, IrBuilder.MethodIr> flowIrs) {
+        return layoutViaInflate(graph, caller, flowIrs, null);
+    }
+
+    static String layoutViaInflate(RefGraph graph, String caller,
+                                   Map<String, IrBuilder.MethodIr> flowIrs,
+                                   Map<IrBuilder.MethodIr, ReachConsts.ConstResult> constCache) {
         try {
             if (graph == null || caller == null || flowIrs == null) return "";
             IrBuilder.MethodIr ir = flowIrs.get(caller);
             if (ir == null) return "";
-            ReachConsts.ConstResult cr = ReachConsts.analyze(ir);
+            ReachConsts.ConstResult cr = ReachConsts.analyzeCached(ir, constCache);
             if (cr == null || cr.callConsts == null) return "";
             for (ReachConsts.CallConst cc : cr.callConsts) {
                 if (cc == null || cc.kind != ReachConsts.Kind.LIT) continue;
@@ -255,9 +278,14 @@ public final class PhantomUi {
      * LOW cuando el sitio exacto no se verifica. "" si no hay. Nunca lanza.
      */
     static String layoutApprox(IrBuilder.MethodIr ir) {
+        return layoutApprox(ir, null);
+    }
+
+    static String layoutApprox(IrBuilder.MethodIr ir,
+                               Map<IrBuilder.MethodIr, ReachConsts.ConstResult> constCache) {
         try {
             if (ir == null) return "";
-            ReachConsts.ConstResult cr = ReachConsts.analyze(ir);
+            ReachConsts.ConstResult cr = ReachConsts.analyzeCached(ir, constCache);
             if (cr == null || cr.callConsts == null) return "";
             for (ReachConsts.CallConst cc : cr.callConsts) {
                 if (cc == null || cc.kind != ReachConsts.Kind.LIT) continue;

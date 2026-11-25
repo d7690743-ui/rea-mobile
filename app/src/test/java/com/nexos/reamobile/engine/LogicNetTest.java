@@ -210,4 +210,19 @@ public class LogicNetTest {
         assertTrue(LogicNet.reachableFrom(g, "Lcom/x/A;->a", 0, 0).nodes.isEmpty());
         assertTrue(LogicNet.topCallees(g, 0).isEmpty());
     }
+
+    @Test
+    public void cadenaTrivialEntrada() {
+        // Objetivo solo-llamador que es entrada: cadena trivial [t].
+        RefGraph g = grafo(
+                new String[]{"Lcom/x/A;->onCreate", "Lcom/x/B;->foo"});
+        LogicNet.Chains ch = LogicNet.chainsTo(g, "Lcom/x/A;->onCreate", 8, 10);
+        assertEquals(1, ch.chains.size());
+        assertEquals(1, ch.chains.get(0).size());
+        assertEquals("Lcom/x/A;->onCreate", ch.chains.get(0).get(0));
+        // Solo-llamador que NO es entrada: vacío (sin raíz válida).
+        RefGraph g2 = grafo(
+                new String[]{"Lcom/x/A;->ayuda", "Lcom/x/B;->foo"});
+        assertTrue(LogicNet.chainsTo(g2, "Lcom/x/A;->ayuda", 8, 10).chains.isEmpty());
+    }
 }

@@ -4,6 +4,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.IdentityHashMap;
+import java.util.Map;
 import org.junit.Test;
 
 /** OMEGA E2: reaching definitions + propagación de constantes. */
@@ -103,5 +105,56 @@ public class ReachConstsTest {
         IrBuilder.MethodIr mala = new IrBuilder.MethodIr();
         mala.error = "x";
         assertTrue(ReachConsts.analyze(mala).entry.isEmpty());
+    }
+
+    @Test
+    public void pliegaRsubYLit8() {
+        assertEquals(6, pliegaLit8(0xD9, 4, 10)); // rsub-int/lit8: lit - reg
+        assertEquals(5, pliegaLit8(0xD8, 2, 3)); // add-int/lit8 (antes: shl)
+        assertEquals(12, pliegaLit8(0xDA, 3, 4)); // mul-int/lit8 (antes: ushr)
+        assertEquals(3, pliegaLit8(0xD1, 4, 7)); // rsub-int/lit16: lit - reg
+    }
+
+    static long pliegaLit8(int op, long reg, long lit) {
+        IrBuilder.MethodIr ir = new IrBuilder.MethodIr();
+        ir.regs = 3;
+        IrBuilder.Insn c = DefUseTest.insn(0, 0x12, 0);
+        c.hasLit = true;
+        c.lit = reg;
+        IrBuilder.Insn o = DefUseTest.insn(1, op, 1, 0);
+        o.hasLit = true;
+        o.lit = lit;
+        IrBuilder.Insn ret = DefUseTest.insn(4, 0x0E);
+        ret.isReturn = true;
+        ir.blocks.add(DefUseTest.block(0, new int[]{}, c, o,
+                DefUseTest.insn(3, 0x6E, 1), ret));
+        ReachConsts.ConstResult r = ReachConsts.analyze(ir);
+        assertEquals(1, r.callConsts.size());
+        return r.callConsts.get(0).lit;
+    }
+
+    @Test
+    public void wideEsNac() {
+        IrBuilder.MethodIr ir = new IrBuilder.MethodIr();
+        ir.regs = 3;
+        IrBuilder.Insn w = DefUseTest.insn(0, 0x18, 0);
+        w.hasLit = true;
+        w.lit = 9;
+        IrBuilder.Insn ret = DefUseTest.insn(4, 0x0E);
+        ret.isReturn = true;
+        ir.blocks.add(DefUseTest.block(0, new int[]{}, w,
+                DefUseTest.insn(3, 0x6E, 0), ret));
+        assertTrue(ReachConsts.analyze(ir).callConsts.isEmpty());
+    }
+
+    @Test
+    public void memoizaPorInstancia() {
+        IrBuilder.MethodIr ir = constIr();
+        Map<IrBuilder.MethodIr, ReachConsts.ConstResult> cache =
+                new IdentityHashMap<IrBuilder.MethodIr, ReachConsts.ConstResult>();
+        ReachConsts.ConstResult a = ReachConsts.analyzeCached(ir, cache);
+        assertTrue(a == ReachConsts.analyzeCached(ir, cache));
+        assertEquals(1, cache.size());
+        assertTrue(ReachConsts.analyzeCached(null, cache).callConsts.isEmpty());
     }
 }

@@ -65,8 +65,7 @@ public final class InterProc {
         List<String> out = new ArrayList<>();
         try {
             if (graph == null || caller == null) return out;
-            String[] parts = RefGraph.split(caller);
-            for (RefGraph.RefEdge e : graph.edgesFrom(parts[0], parts[1])) {
+            for (RefGraph.RefEdge e : graph.edgesFromKey(caller)) {
                 if (e != null && e.pos == pos && e.callee != null && !"?".equals(e.callee)) {
                     if (!out.contains(e.callee)) out.add(e.callee);
                 }

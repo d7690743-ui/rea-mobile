@@ -37,6 +37,8 @@ public final class RefGraph {
     private final Map<String, RefEdge> edges = new LinkedHashMap<>();
     private final Map<String, Set<String>> forward = new LinkedHashMap<>();
     private final Map<String, Set<String>> backward = new LinkedHashMap<>();
+    /** T8: llamador → sus aristas (evita el barrido O(E) de edgesFrom). */
+    private final Map<String, List<RefEdge>> fromEdges = new LinkedHashMap<>();
     private final Set<String> nodes = new LinkedHashSet<>();
     private final int maxEdges;
     private int dropped;
@@ -96,6 +98,12 @@ public final class RefGraph {
             edges.put(key, re);
             link(forward, caller, callee);
             link(backward, callee, caller);
+            List<RefEdge> fl = fromEdges.get(caller);
+            if (fl == null) {
+                fl = new ArrayList<>();
+                fromEdges.put(caller, fl);
+            }
+            fl.add(re);
             nodes.add(caller);
             nodes.add(callee);
             return true;
@@ -128,18 +136,26 @@ public final class RefGraph {
         return copySet(forward.get(method));
     }
 
+    /** Aristas de un llamador (índice; copia en orden de aparición). Nunca lanza. */
+    public List<RefEdge> edgesFromKey(String caller) {
+        try {
+            if (caller == null) return new ArrayList<>();
+            List<RefEdge> l = fromEdges.get(caller);
+            if (l == null) return new ArrayList<>();
+            return new ArrayList<>(l);
+        } catch (Throwable ignored) {
+            return new ArrayList<>();
+        }
+    }
+
     /** Sitios de llamada de una clase+método. Nunca lanza. */
     public List<RefEdge> edgesFrom(String cls, String method) {
-        List<RefEdge> out = new ArrayList<>();
         try {
-            if (cls == null || method == null) return out;
-            String key = cls + "->" + method;
-            for (RefEdge e : edges.values()) {
-                if (key.equals(e.caller)) out.add(e);
-            }
+            if (cls == null || method == null) return new ArrayList<>();
+            return edgesFromKey(cls + "->" + method);
         } catch (Throwable ignored) {
+            return new ArrayList<>();
         }
-        return out;
     }
 
     /** true si el método aparece como llamador o llamado. Nunca lanza. */

@@ -76,20 +76,10 @@ public final class PhantomNames {
         }
     }
 
-    /** Clase ofuscada probable: segmento final de ≤3 letras. Nunca lanza. */
+    /** Clase ofuscada probable: delega en DexParser.isShortName (B3, única fuente). */
     static boolean isObfuscated(String cls) {
         try {
-            if (cls == null || !cls.startsWith("L")) return false;
-            int s = cls.lastIndexOf('/');
-            int e = cls.endsWith(";") ? cls.length() - 1 : cls.length();
-            String tail = s < 0 ? cls.substring(1, e) : cls.substring(s + 1, e);
-            if (tail.isEmpty() || tail.length() > 3) return false;
-            for (int i = 0; i < tail.length(); i++) {
-                char c = tail.charAt(i);
-                if (c != '$' && (c < 'a' || c > 'z')
-                        && (c < 'A' || c > 'Z')) return false;
-            }
-            return true;
+            return DexParser.isShortName(cls);
         } catch (Throwable ignored) {
             return false;
         }
@@ -231,7 +221,8 @@ public final class PhantomNames {
                 if (e == null || e.getValue() == null) continue;
                 out.add(e.getKey() + " → " + e.getValue());
                 if (out.size() >= 20) {
-                    out.add("(+" + (names.size() - 20) + " más)");
+                    int rest = names.size() - 20;
+                    if (rest > 0) out.add("(+" + rest + " más)");
                     break;
                 }
             }
