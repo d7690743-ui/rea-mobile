@@ -64,4 +64,22 @@ public class DexParserTest {
         assertTrue(e2.headerNote != null);
         assertTrue(e2.headerNote.contains("checksum"));
     }
+
+    @Test
+    public void degradacionParcial() {
+        byte[] dex = SmaliExtractTest.buildTestDex();
+        // method_ids fuera de rango: esa sección se degrada, las clases salen.
+        byte[] cut = dex.clone();
+        int off = cut.length - 4;
+        cut[92] = (byte) (off & 0xFF);
+        cut[93] = (byte) ((off >> 8) & 0xFF);
+        cut[94] = (byte) ((off >> 16) & 0xFF);
+        cut[95] = (byte) ((off >> 24) & 0xFF);
+        DexParser.DexInfo di = DexParser.parse(cut, "t");
+        assertTrue(di.error == null);
+        assertTrue(di.degradedItems == 8);
+        assertTrue(di.classes.size() == 1);
+        // Íntegro: cero degradados.
+        assertTrue(DexParser.parse(dex, "t").degradedItems == 0);
+    }
 }

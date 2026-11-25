@@ -495,4 +495,19 @@ public class ReaEngineTest {
     static void le64(ByteArrayOutputStream b, long v) {
         for (int i = 0; i < 8; i++) b.write((int) ((v >> (8 * i)) & 0xFF));
     }
+
+    @Test
+    public void nombresSeguros() {
+        assertEquals("a_b_c.apk", ReaEngine.safeFileName("a/b\\c.apk", 64));
+        assertEquals("fichero", ReaEngine.safeFileName("...", 64));
+        assertEquals("fichero", ReaEngine.safeFileName(null, 64));
+        assertEquals("abcdefgh", ReaEngine.safeFileName("abcdefghijklmnop", 8));
+        assertEquals("com_x_App_1-2.apk",
+                ReaEngine.safeFileName("com_x_App_1-2.apk", 64));
+        assertEquals("a/b.apk", ReaEngine.normalizeZipEntry("a/b.apk"));
+        assertEquals("a/b.apk", ReaEngine.normalizeZipEntry("a\\..\\a/b.apk"));
+        assertEquals("vacio", ReaEngine.normalizeZipEntry("../../.."));
+        assertEquals("vacio", ReaEngine.normalizeZipEntry(null));
+        assertEquals("x/y", ReaEngine.normalizeZipEntry("///x/./y"));
+    }
 }

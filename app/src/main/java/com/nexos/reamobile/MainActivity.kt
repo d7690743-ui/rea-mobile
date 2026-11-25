@@ -37,6 +37,7 @@ class MainActivity : Activity() {
     private lateinit var progress: ProgressBar
     private var lastReport: String = ""
     private var lastApk: File? = null
+    private var disclaimer: AlertDialog? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,6 +97,44 @@ class MainActivity : Activity() {
         btnShareZip.setOnClickListener { shareZip() }
         btnView.setOnClickListener { openViewer() }
         showDisclaimerOnce()
+        restoreState(savedInstanceState)
+    }
+
+    override fun onDestroy() {
+        try {
+            disclaimer?.dismiss()
+        } catch (t: Throwable) {
+        }
+        disclaimer = null
+        super.onDestroy()
+    }
+
+    override fun onSaveInstanceState(out: Bundle) {
+        super.onSaveInstanceState(out)
+        // El informe vive en caché (puede pasar 1 MB); aquí solo ruta y paquete.
+        out.putString("lastApk", lastApk?.absolutePath)
+        out.putString("pkg", Session.pkg)
+    }
+
+    /** Restaura informe+APK tras muerte del proceso (H7). */
+    private fun restoreState(saved: Bundle?) {
+        if (saved == null || Session.apk != null) return
+        try {
+            val path = saved.getString("lastApk") ?: return
+            val apk = File(path)
+            if (!apk.isFile) return
+            val rep = File(cacheDir, "rea_ultimo_informe.txt")
+            if (!rep.isFile) return
+            lastApk = apk
+            Session.apk = apk
+            lastReport = rep.readText()
+            Session.pkg = saved.getString("pkg", "?") ?: "?"
+            txt.text = Session.capForView(lastReport)
+            btnShare.isEnabled = true
+            btnExtract.isEnabled = true
+            btnView.isEnabled = true
+        } catch (t: Throwable) {
+        }
     }
 
     private fun appVersion(): String {
@@ -110,7 +149,7 @@ class MainActivity : Activity() {
     private fun showDisclaimerOnce() {
         val prefs = getPreferences(MODE_PRIVATE)
         if (prefs.getBoolean("disclaimer_ok", false)) return
-        AlertDialog.Builder(this)
+        disclaimer = AlertDialog.Builder(this)
             .setTitle("Uso responsable")
             .setMessage(
                 "Analiza solo APKs que te pertenecen o para los que tienes autorización " +
@@ -179,6 +218,10 @@ class MainActivity : Activity() {
                 val report = ReaEngine.analyze(tmp)
                 val pmSection = packageManagerSection(tmp.absolutePath)
                 lastReport = report.toText() + "\n" + pmSection
+                try {
+                    File(cacheDir, "rea_ultimo_informe.txt").writeText(lastReport)
+                } catch (t: Throwable) {
+                }
                 runOnUiThread {
                     lastApk = tmp
                     Session.apk = tmp
@@ -258,24 +301,39 @@ class MainActivity : Activity() {
 
     @SuppressLint("NewApi")
     private fun saveZipToDownloads(zip: File, pkg: String): String {
-        val safePkg = if (pkg == "?" || pkg.isEmpty()) "apk" else pkg.replace('.', '_')
-        val name = safePkg + "_rea_mobile.zip"
+        val safePkg = if (pkg == "?" || pkg.isEmpty()) "apk"
+        else ReaEngine.safeFileName(pkg.replace('.', '_'), 48)
+        val name = ReaEngine.safeFileName(safePkg + "_rea_mobile.zip", 64)
         if (Build.VERSION.SDK_INT >= 29) {
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, name)
                 put(MediaStore.Downloads.MIME_TYPE, "application/zip")
                 put(MediaStore.Downloads.RELATIVE_PATH, "Download/REA-Mobile")
+                put(MediaStore.Downloads.IS_PENDING, 1)
             }
             val uri: Uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: throw IllegalStateException("MediaStore rechazó la inserción")
-            contentResolver.openOutputStream(uri)?.use { out ->
-                FileInputStream(zip).use { inp -> inp.copyTo(out) }
-            } ?: throw IllegalStateException("sin stream de salida")
+            try {
+                contentResolver.openOutputStream(uri)?.use { out ->
+                    FileInputStream(zip).use { inp -> inp.copyTo(out) }
+                } ?: throw IllegalStateException("sin stream de salida")
+            } finally {
+                val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                try {
+                    contentResolver.update(uri, done, null, null)
+                } catch (t: Throwable) {
+                }
+            }
             return "Descargas/REA-Mobile/$name"
         } else {
             val dir = getExternalFilesDir(null)
                 ?: throw IllegalStateException("sin almacenamiento externo")
-            val dest = File(dir, name)
+            var dest = File(dir, name)
+            var n = 1
+            while (dest.exists() && n < 100) {
+                n++
+                dest = File(dir, name.removeSuffix(".zip") + "_$n.zip")
+            }
             FileInputStream(zip).use { inp -> FileOutputStream(dest).use { inp.copyTo(it) } }
             return dest.absolutePath
         }

@@ -110,6 +110,8 @@ public final class ReaEngine {
         public List<String> appClasses = new ArrayList<>();
         public int appClassTotal;
         public boolean apkSigBlock;
+        /** Integridad digest v2/v3: OK | FALLA | sin-bloque | no-comprobable. */
+        public String sigIntegrity = "no comprobada";
         public List<String> topPackages = new ArrayList<>();
         public List<String> topHosts = new ArrayList<>();
         public int urlTotal;
@@ -231,6 +233,7 @@ public final class ReaEngine {
             sb.append("ofuscacionRatio=").append(String.format(Locale.US, "%.2f", obfuscatedRatio)).append('\n');
             sb.append("clasesPropias=").append(appClassTotal).append('\n');
             sb.append("sigBlockV2=").append(apkSigBlock).append('\n');
+            sb.append("sigIntegridad=").append(sigIntegrity).append('\n');
             sb.append("topPaquetes=").append(topPackages).append('\n');
             sb.append("hostsTop=").append(topHosts).append('\n');
             sb.append("api=").append(apiStats).append('\n');
@@ -252,7 +255,8 @@ public final class ReaEngine {
             if (!sigScheme.isEmpty()) sb.append("esquema=").append(sigScheme).append('\n');
             if (!sigCertSha256.isEmpty()) sb.append("certSHA256=").append(sigCertSha256).append('\n');
             if (!sigCertSubject.isEmpty()) sb.append("certSujeto=").append(sigCertSubject).append('\n');
-            sb.append("verificada=").append(sigVerified ? "sí" : "no (presencia; validez NO comprobada)").append('\n');
+            sb.append("verificada=").append(sigVerified ? "sí" : "no (integridad digest: "
+                    + sigIntegrity + "; cadena NO validada)").append('\n');
             sb.append("\n=== MANIFEST (").append(manifestNote).append(") ===\n");
             sb.append("permisos(").append(manifestPerms.size()).append(")\n");
             for (String p : manifestPerms) sb.append("  - ").append(p).append('\n');
@@ -656,6 +660,7 @@ public final class ReaEngine {
             jsonField(sb, "sigCertSha256", sigCertSha256, false);
             jsonField(sb, "sigCertSubject", sigCertSubject, false);
             sb.append(",\"sigVerificada\":").append(sigVerified);
+            jsonField(sb, "sigIntegridad", sigIntegrity, false);
             sb.append(",\"libAppSize\":").append(libAppSize);
             sb.append(",\"libAppStrings\":").append(libAppStrings);
             jsonStrList(sb, "libAppUrls", libAppUrls);
@@ -905,6 +910,16 @@ public final class ReaEngine {
             } else {
                 r.apkSigBlock = hasApkSigBlock(apk);
             }
+            if (r.apkSigBlock) {
+                try {
+                    ApkSigBlock.Verify vv = ApkSigBlock.verify(apk);
+                    r.sigIntegrity = vv.integrity;
+                } catch (Throwable ignored) {
+                    r.sigIntegrity = "no-comprobable";
+                }
+            } else {
+                r.sigIntegrity = "sin-bloque";
+            }
 
             Set<String> urlSet = new LinkedHashSet<>();
             Set<String> ipSet = new LinkedHashSet<>();
@@ -1002,6 +1017,8 @@ public final class ReaEngine {
                         continue;
                     }
                     if (di.headerNote != null) r.dexNotes.add(dexName + ": " + di.headerNote);
+                    if (di.degradedItems > 0) r.dexNotes.add(dexName + ": "
+                            + di.degradedItems + " elemento(s) degradado(s)");
                     r.totalStrings += di.stringCount;
                     r.totalClasses += di.classCount;
                     r.totalMethods += di.methodCount;
@@ -1890,7 +1907,7 @@ public final class ReaEngine {
                             r.notes.add("tope total ZIP alcanzado en " + name);
                             break;
                         }
-                        zos.putNextEntry(new ZipEntry("apk/" + name));
+                        zos.putNextEntry(new ZipEntry("apk/" + normalizeZipEntry(name)));
                         zos.write(data);
                         zos.closeEntry();
                         total += data.length;
@@ -1901,7 +1918,7 @@ public final class ReaEngine {
                                 try {
                                     String xml = AxmlDecoder.decode(data);
                                     if (xml != null && !xml.isEmpty()) {
-                                        putText(zos, "rea/layouts/" + name, xml);
+                                        putText(zos, "rea/layouts/" + normalizeZipEntry(name), xml);
                                         layoutOk++;
                                     }
                                 } catch (Throwable ignored) {
@@ -1925,7 +1942,7 @@ public final class ReaEngine {
                                     throw new SmaliDumper.Stop("tope 150MB en ZIP");
                                 }
                                 byte[] data = text.getBytes("UTF-8");
-                                zosF.putNextEntry(new ZipEntry("rea/" + path));
+                                zosF.putNextEntry(new ZipEntry("rea/" + normalizeZipEntry(path)));
                                 zosF.write(data);
                                 zosF.closeEntry();
                                 smaliBytes[0] += text.length();
@@ -2002,7 +2019,8 @@ public final class ReaEngine {
                                 apk, wd, JadxAdapter.recommendedThreads(heap), slashes,
                                 JadxAdapter.recommendedCap(heap), null);
                         for (Map.Entry<String, String> e : jr.sources.entrySet()) {
-                            putText(zos, "rea/JAVA/" + e.getKey().replace('.', '/') + ".java", e.getValue());
+                            putText(zos, "rea/JAVA/" + normalizeZipEntry(
+                                    e.getKey().replace('.', '/') + ".java"), e.getValue());
                         }
                         r.notes.add("java: " + jr.sources.size() + " clases, errores=" + jr.errors);
                         if (jr.truncated) r.notes.add("java: recortado por topes");
@@ -2062,6 +2080,65 @@ public final class ReaEngine {
                     || name.startsWith("res/drawable/") || name.startsWith("res/values/");
         } catch (Throwable ignored) {
             return false;
+        }
+    }
+
+    /**
+     * Nombre de fichero seguro (S3): lista blanca [A-Za-z0-9._-], resto '_',
+     * tope maxLen. Nunca lanza; nunca vacío.
+     */
+    public static String safeFileName(String s, int maxLen) {
+        try {
+            if (s == null) s = "";
+            StringBuilder b = new StringBuilder();
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                boolean ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                        || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+                b.append(ok ? c : '_');
+            }
+            String r = b.toString();
+            while (r.startsWith(".")) r = r.substring(1);
+            if (r.isEmpty()) r = "fichero";
+            int cap = Math.max(8, Math.min(maxLen, 128));
+            if (r.length() > cap) r = r.substring(0, cap);
+            return r;
+        } catch (Throwable t) {
+            return "fichero";
+        }
+    }
+
+    /**
+     * Normaliza un nombre de entrada ZIP ajeno (S2): separadores a '/',
+     * sin raíz; "." se ignora y ".." retrocede sin salir de la raíz.
+     * Tope 240 caracteres. Nunca lanza; nunca vacío.
+     */
+    public static String normalizeZipEntry(String name) {
+        try {
+            if (name == null) return "vacio";
+            String n = name.replace('\\', '/');
+            while (n.startsWith("/")) n = n.substring(1);
+            String[] parts = n.split("/");
+            java.util.List<String> segs = new java.util.ArrayList<>();
+            for (String p : parts) {
+                if (p.isEmpty() || ".".equals(p)) continue;
+                if ("..".equals(p)) {
+                    if (!segs.isEmpty()) segs.remove(segs.size() - 1);
+                    continue;
+                }
+                segs.add(p.length() > 100 ? p.substring(0, 100) : p);
+            }
+            StringBuilder b = new StringBuilder();
+            for (String s : segs) {
+                if (b.length() > 0) b.append('/');
+                b.append(s);
+                if (b.length() >= 240) break;
+            }
+            String r = b.toString();
+            if (r.length() > 240) r = r.substring(0, 240);
+            return r.isEmpty() ? "vacio" : r;
+        } catch (Throwable t) {
+            return "vacio";
         }
     }
 
@@ -2292,8 +2369,10 @@ public final class ReaEngine {
                 det = "Esquema " + r.sigScheme
                         + (r.sigCertSubject.isEmpty() ? "" : "; " + r.sigCertSubject);
             }
-            r.finding("firma", "Bloque de firma APK v2/v3+ presente (validez NO verificada)",
-                    det, "magia \"APK Sig Block 42\""
+            r.finding("firma", "Bloque de firma APK v2/v3+ (integridad digest: "
+                            + r.sigIntegrity + ")",
+                    det + " Cadena de certificados NO validada.",
+                    "magia \"APK Sig Block 42\""
                             + (r.sigCertSha256.isEmpty() ? "" : "; sha256=" + r.sigCertSha256));
         }
         if (!r.frameworks.isEmpty()) {

@@ -69,8 +69,12 @@ public class ZipShareProvider extends ContentProvider {
 
     @Override
     public AssetFileDescriptor openAssetFile(Uri uri, String mode) throws FileNotFoundException {
-        ParcelFileDescriptor pfd = openFile(uri, mode);
-        return new AssetFileDescriptor(pfd, 0, fileFor(MATCHER.match(uri)).length());
+        int code = MATCHER.match(uri);
+        if (code == UriMatcher.NO_MATCH) throw new FileNotFoundException("uri no válido");
+        File f = fileFor(code);
+        ParcelFileDescriptor pfd =
+                ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
+        return new AssetFileDescriptor(pfd, 0, f.length());
     }
 
     @Override

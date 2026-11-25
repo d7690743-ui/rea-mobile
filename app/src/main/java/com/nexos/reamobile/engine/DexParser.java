@@ -53,6 +53,8 @@ public final class DexParser {
         public String error;
         /** Aviso no fatal: file_size/checksum/signature discrepantes (L-02). */
         public String headerNote;
+        /** Métodos/clases omitidos por degradación parcial (M-02). */
+        public int degradedItems;
     }
 
     /** Patrones de API sensible: {prefijoDeClase, contieneEnFirma}. */
@@ -145,18 +147,25 @@ public final class DexParser {
             int keepMethods = Math.min(methodIdsSize, MAX_METHODS_SAMPLE);
             for (int i = 0; i < methodIdsSize; i++) {
                 int p = methodIdsOff + i * 8;
-                if (p + 8 > buf.length) break;
-                int classIdx = u16(buf, p);
-                int protoIdx = u16(buf, p + 2);
-                int nameIdx = u32(buf, p + 4);
-                String cls = types.get(classIdx);
-                String name = strings.get(nameIdx);
-                if (i < keepMethods) {
-                    String proto = readProto(buf, protoIdsOff, protoIdsSize, types, protoIdx);
-                    info.methodSample.add(cls + "->" + name + proto);
+                if (p < 0 || p + 8 > buf.length) {
+                    info.degradedItems += methodIdsSize - i;
+                    break;
                 }
-                bucketize(info, cls);
-                matchSuspicious(info, cls, name);
+                try {
+                    int classIdx = u16(buf, p);
+                    int protoIdx = u16(buf, p + 2);
+                    int nameIdx = u32(buf, p + 4);
+                    String cls = types.get(classIdx);
+                    String name = strings.get(nameIdx);
+                    if (i < keepMethods) {
+                        String proto = readProto(buf, protoIdsOff, protoIdsSize, types, protoIdx);
+                        info.methodSample.add(cls + "->" + name + proto);
+                    }
+                    bucketize(info, cls);
+                    matchSuspicious(info, cls, name);
+                } catch (RuntimeException one) {
+                    info.degradedItems++;
+                }
             }
 
             // 4) Clases definidas.
@@ -164,19 +173,26 @@ public final class DexParser {
             int keepClasses = Math.min(classDefsSize, MAX_CLASSES);
             for (int i = 0; i < classDefsSize; i++) {
                 int p = classDefsOff + i * 32;
-                if (p + 32 > buf.length) break;
-                int classIdx = u32(buf, p);
-                int superIdx = u32(buf, p + 8);
-                int srcIdx = u32(buf, p + 16);
-                String cls = types.get(classIdx);
-                if (isShortName(cls)) shortNames++;
-                if (i < keepClasses) {
-                    ClassInfo ci = new ClassInfo();
-                    ci.name = cls;
-                    ci.superName = (superIdx == 0xFFFFFFFF || superIdx < 0
-                            || superIdx >= types.size()) ? "-" : types.get(superIdx);
-                    ci.sourceFile = (srcIdx == 0xFFFFFFFF) ? "-" : strings.get(srcIdx);
-                    info.classes.add(ci);
+                if (p < 0 || p + 32 > buf.length) {
+                    info.degradedItems += classDefsSize - i;
+                    break;
+                }
+                try {
+                    int classIdx = u32(buf, p);
+                    int superIdx = u32(buf, p + 8);
+                    int srcIdx = u32(buf, p + 16);
+                    String cls = types.get(classIdx);
+                    if (isShortName(cls)) shortNames++;
+                    if (i < keepClasses) {
+                        ClassInfo ci = new ClassInfo();
+                        ci.name = cls;
+                        ci.superName = (superIdx == 0xFFFFFFFF || superIdx < 0
+                                || superIdx >= types.size()) ? "-" : types.get(superIdx);
+                        ci.sourceFile = (srcIdx == 0xFFFFFFFF) ? "-" : strings.get(srcIdx);
+                        info.classes.add(ci);
+                    }
+                } catch (RuntimeException one) {
+                    info.degradedItems++;
                 }
             }
             info.classesTruncated = classDefsSize > MAX_CLASSES;

@@ -52,6 +52,7 @@ class CodeViewerActivity : Activity() {
     private var lastFindQuery = ""
     private var lastFindMatches: List<JavaHarvest.Hit> = emptyList()
     private var lastFindIdx = -1
+    private var findSeq = 0
     private lateinit var progress: ProgressBar
     private var filtered: List<String> = emptyList()
     private var selected: String? = null
@@ -163,9 +164,23 @@ class CodeViewerActivity : Activity() {
             }
 
         refreshList(Session.appClasses)
+        if (savedInstanceState != null) {
+            modeSmali = savedInstanceState.getBoolean("modeSmali", true)
+            search.setText(savedInstanceState.getString("filter", ""))
+            savedInstanceState.getString("selected")?.let { selected = it }
+            applyFilter()
+            if (selected != null) showCode()
+        }
         updateStatus("Cargando dex…")
         loadDex(apk)
         seenSeq = Session.jadxSeq
+    }
+
+    override fun onSaveInstanceState(out: Bundle) {
+        super.onSaveInstanceState(out)
+        out.putBoolean("modeSmali", modeSmali)
+        out.putString("filter", search.text.toString())
+        out.putString("selected", selected)
     }
 
     override fun onResume() {
@@ -229,7 +244,7 @@ class CodeViewerActivity : Activity() {
     private fun applyFilter() {
         val q = search.text.toString().trim()
         val base = if (Session.appClasses.isNotEmpty()) Session.appClasses
-            else Session.smaliCache.keys.sorted()
+            else Session.smaliSnapshot().keys.sorted()
         refreshList(if (q.isEmpty()) base else base.filter { it.contains(q, ignoreCase = true) })
         updateStatus()
     }
@@ -380,7 +395,7 @@ class CodeViewerActivity : Activity() {
         if (Session.smaliCache.isNotEmpty()) {
             markWorking(false)
             progress.visibility = View.GONE
-            if (Session.appClasses.isEmpty()) refreshList(Session.smaliCache.keys.sorted())
+            if (Session.appClasses.isEmpty()) refreshList(Session.smaliSnapshot().keys.sorted())
             autoSelect()
             updateStatus()
             return
@@ -399,7 +414,7 @@ class CodeViewerActivity : Activity() {
             runOnUiThread {
                 markWorking(false)
                 progress.visibility = View.GONE
-                if (Session.appClasses.isEmpty()) refreshList(Session.smaliCache.keys.sorted())
+                if (Session.appClasses.isEmpty()) refreshList(Session.smaliSnapshot().keys.sorted())
                 autoSelect()
                 updateStatus()
             }
@@ -447,20 +462,23 @@ class CodeViewerActivity : Activity() {
                 // lista vacía = orden de carga de siempre.
                 val prio: List<String> = try {
                     val rep = ReaEngine.analyze(apk)
-                    val p = PhantomDecompile.priority(rep,
+                    PhantomDecompile.priority(rep,
                         JadxAdapter.recommendedCap(heap))
-                    System.gc()
-                    p
                 } catch (t: Throwable) {
                     emptyList()
                 }
+                var lastPub = 0L
                 res = JadxAdapter.decompileFiltered(apk, cacheDir,
                     JadxAdapter.recommendedThreads(heap), prefixes,
                     JadxAdapter.recommendedCap(heap),
                     object : JadxAdapter.Progress {
                         override fun onClass(done: Int, matched: Int): Boolean {
                             Session.jadxProgressMsg = "JADX $done clases…"
-                            runOnUiThread { updateStatus("JADX $done clases…") }
+                            val now = System.currentTimeMillis()
+                            if (now - lastPub >= 500) {
+                                lastPub = now
+                                runOnUiThread { updateStatus("JADX $done clases…") }
+                            }
                             return !stopRequested
                         }
 
@@ -479,7 +497,7 @@ class CodeViewerActivity : Activity() {
                     Session.jadxTruncated = true
                 }
                 val secs = try {
-                    JavaHarvest.findSecrets(Session.jadxCache, 200)
+                    JavaHarvest.findSecrets(Session.jadxSnapshot(), 200)
                 } catch (t: Throwable) {
                     emptyList<JavaHarvest.Hit>()
                 }
@@ -552,43 +570,77 @@ class CodeViewerActivity : Activity() {
             return
         }
         val text = code.text.toString()
+        // Índice de inicios de línea: una pasada + búsqueda binaria por hit (T7).
+        val starts = ArrayList<Int>()
+        starts.add(0)
+        var nl = text.indexOf('\n')
+        while (nl >= 0) {
+            starts.add(nl + 1)
+            nl = text.indexOf('\n', nl + 1)
+        }
         var count = 0
         val lines = mutableListOf<Int>()
         var idx = text.indexOf(q)
         while (idx >= 0 && count < 1000) {
             count++
-            if (lines.size < 5) lines.add(text.substring(0, idx).count { it == '\n' } + 1)
+            if (lines.size < 5) {
+                var lo = 0
+                var hi = starts.size - 1
+                while (lo < hi) {
+                    val mid = (lo + hi + 1) / 2
+                    if (starts[mid] <= idx) lo = mid else hi = mid - 1
+                }
+                lines.add(lo + 1)
+            }
             idx = text.indexOf(q, idx + 1)
         }
-        var msg = if (count == 0) "sin coincidencias"
-            else "$count coincidencias (líneas ${lines.joinToString()})"
-        // Búsqueda global en el Java: repetir Buscar avanza al siguiente hit.
-        if (Session.jadxCache.isNotEmpty()) {
-            if (q != lastFindQuery) {
-                lastFindMatches = try {
-                    JavaHarvest.search(Session.jadxCache, q, true, 200)
-                } catch (t: Throwable) {
-                    emptyList()
-                }
-                lastFindIdx = -1
-                lastFindQuery = q
-            }
-            if (lastFindMatches.isNotEmpty()) {
-                lastFindIdx = (lastFindIdx + 1) % lastFindMatches.size
-                val h = lastFindMatches[lastFindIdx]
-                modeSmali = false
-                showingLog = false
-                val desc = filtered.firstOrNull { d ->
-                    JadxAdapter.candidateKeys(d).contains(h.className)
-                }
-                if (desc != null) selected = desc
-                code.text = Session.jadxCache[h.className] ?: code.text.toString()
-                msg += "; java ${lastFindIdx + 1}/${lastFindMatches.size} ${h.className}:${h.line}"
-            } else {
-                msg += "; java-global: 0"
-            }
+        val local = if (count == 0) "sin coincidencias"
+        else "$count coincidencias (líneas ${lines.joinToString()})"
+        if (Session.jadxCache.isEmpty()) {
+            hits.text = local
+            return
         }
-        hits.text = msg
+        // Búsqueda global en el Java, en fondo: repetir Buscar avanza al hit.
+        val my = ++findSeq
+        hits.text = "$local; java-global…"
+        Thread {
+            var msg = local
+            try {
+                if (q != lastFindQuery) {
+                    lastFindMatches = try {
+                        JavaHarvest.search(Session.jadxSnapshot(), q, true, 200)
+                    } catch (t: Throwable) {
+                        emptyList()
+                    }
+                    lastFindIdx = -1
+                    lastFindQuery = q
+                }
+                if (lastFindMatches.isNotEmpty()) {
+                    lastFindIdx = (lastFindIdx + 1) % lastFindMatches.size
+                    val h = lastFindMatches[lastFindIdx]
+                    val desc = filtered.firstOrNull { d ->
+                        JadxAdapter.candidateKeys(d).contains(h.className)
+                    }
+                    val body = Session.jadxCache[h.className]
+                    runOnUiThread {
+                        if (my != findSeq) return@runOnUiThread
+                        modeSmali = false
+                        showingLog = false
+                        if (desc != null) selected = desc
+                        if (body != null) code.text = Session.capForView(body)
+                        hits.text = msg + "; java ${lastFindIdx + 1}/${lastFindMatches.size} " +
+                            "${h.className}:${h.line}"
+                    }
+                    return@Thread
+                } else {
+                    msg += "; java-global: 0"
+                }
+            } catch (t: Throwable) {
+                msg += "; java-global: error"
+            }
+            val done = msg
+            runOnUiThread { if (my == findSeq) hits.text = done }
+        }.start()
     }
 
     private fun exportCurrent() {
@@ -597,7 +649,8 @@ class CodeViewerActivity : Activity() {
         if (sel == null || text.isEmpty()) return
         val ext = if (showingLog) "log" else if (modeSmali) "smali" else "java"
         val simple = if (showingLog) "jadx-log"
-            else sel.removePrefix("L").removeSuffix(";").substringAfterLast('/').replace('$', '_')
+        else ReaEngine.safeFileName(
+            sel.removePrefix("L").removeSuffix(";").substringAfterLast('/').replace('$', '_'), 48)
         try {
             val dest = saveTextToDownloads(text, "$simple.$ext")
             hits.text = "Guardado: $dest"
@@ -617,7 +670,7 @@ class CodeViewerActivity : Activity() {
             var n = 0
             var trunc = false
             try {
-                val snap = LinkedHashMap(Session.jadxCache)
+                val snap = Session.jadxSnapshot()
                 val zr = JavaHarvest.zip(snap)
                 val bytes = zr?.zip
                 if (bytes == null) {
@@ -644,6 +697,8 @@ class CodeViewerActivity : Activity() {
     private fun generateFullReport() {
         val apk = Session.apk
         if (apk == null || !apk.isFile() || working) return
+        val key = apk.absolutePath + "|" + apk.length() + "|" + apk.lastModified()
+        val cached = if (key == Session.lastFullReportKey) Session.lastFullReport else null
         markWorking(true)
         progress.visibility = View.VISIBLE
         hits.text = "Generando informe…"
@@ -652,6 +707,10 @@ class CodeViewerActivity : Activity() {
             var fail: String? = null
             var stats = ""
             try {
+                if (cached != null) {
+                    dest = saveTextToDownloads(cached, "informe_completo.txt")
+                    stats = "(en caché)"
+                } else {
                 val tree = mutableListOf<String>()
                 try {
                     ZipFile(apk).use { zip ->
@@ -672,10 +731,10 @@ class CodeViewerActivity : Activity() {
                 }
                 val classes = when {
                     Session.appClasses.isNotEmpty() -> Session.appClasses
-                    Session.smaliCache.isNotEmpty() -> Session.smaliCache.keys.sorted()
+                    Session.smaliCache.isNotEmpty() -> Session.smaliSnapshot().keys.sorted()
                     else -> filtered
                 }
-                val snap = LinkedHashMap(Session.jadxCache)
+                val snap = Session.jadxSnapshot()
                 val extras = FullReport.Extras()
                 extras.build = buildId()
                 // Informe estático + paquete JSON (un solo analyze, PHANTOM incluido).
@@ -705,6 +764,9 @@ class CodeViewerActivity : Activity() {
                     (if (rep.smaliFiles > 0) " smali=${rep.smaliFiles}" else "") +
                     (if (rep.treeTruncated || rep.classesTruncated || rep.javaTruncated ||
                         rep.smaliTruncated) " (recortado)" else "")
+                Session.lastFullReport = rep.text
+                Session.lastFullReportKey = key
+                }
             } catch (e: OutOfMemoryError) {
                 fail = "memoria insuficiente"
             } catch (t: Throwable) {
@@ -742,23 +804,41 @@ class CodeViewerActivity : Activity() {
 
     @SuppressLint("NewApi")
     private fun saveBytesToDownloads(data: ByteArray, name: String, mime: String): String {
-        val safePkg = if (Session.pkg == "?") "apk" else Session.pkg.replace('.', '_')
+        val safePkg = if (Session.pkg == "?") "apk"
+        else ReaEngine.safeFileName(Session.pkg.replace('.', '_'), 48)
+        val safeName = ReaEngine.safeFileName(name, 64)
         if (Build.VERSION.SDK_INT >= 29) {
             val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, name)
+                put(MediaStore.Downloads.DISPLAY_NAME, safeName)
                 put(MediaStore.Downloads.MIME_TYPE, mime)
                 put(MediaStore.Downloads.RELATIVE_PATH, "Download/REA-Mobile/$safePkg")
+                put(MediaStore.Downloads.IS_PENDING, 1)
             }
             val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: throw IllegalStateException("MediaStore rechazó la inserción")
-            contentResolver.openOutputStream(uri)?.use { out ->
-                out.write(data)
-            } ?: throw IllegalStateException("sin stream de salida")
-            return "Descargas/REA-Mobile/$safePkg/$name"
+            try {
+                contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(data)
+                } ?: throw IllegalStateException("sin stream de salida")
+            } finally {
+                val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                try {
+                    contentResolver.update(uri, done, null, null)
+                } catch (t: Throwable) {
+                }
+            }
+            return "Descargas/REA-Mobile/$safePkg/$safeName"
         } else {
             val dir = getExternalFilesDir(null)
                 ?: throw IllegalStateException("sin almacenamiento externo")
-            val dest = File(dir, name)
+            var dest = File(dir, safeName)
+            var n = 1
+            while (dest.exists() && n < 100) {
+                n++
+                val dot = safeName.lastIndexOf('.')
+                dest = if (dot > 0) File(dir, safeName.substring(0, dot) + "_$n" + safeName.substring(dot))
+                else File(dir, "$safeName _$n")
+            }
             FileOutputStream(dest).use { it.write(data) }
             return dest.absolutePath
         }

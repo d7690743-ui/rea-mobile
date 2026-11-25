@@ -49,13 +49,62 @@ public class ApkSigBlockTest {
         assertTrue(ApkSigBlock.splitPairs(new byte[4]).isEmpty());
     }
 
+    @Test
+    public void verificaDigestOk() throws Exception {
+        File apk = new File(tmp.getRoot(), "ok.apk");
+        // Los digests no cubren el bloque: se calculan con ceros y se reescriben.
+        writeApk(apk, true, new byte[32]);
+        byte[] real = digestDe(apk, "SHA-256");
+        writeApk(apk, true, real);
+        ApkSigBlock.Verify v = ApkSigBlock.verify(apk);
+        assertEquals("OK", v.integrity);
+    }
+
+    @Test
+    public void detectaManipulacion() throws Exception {
+        File apk = new File(tmp.getRoot(), "tocado.apk");
+        writeApk(apk, true, new byte[32]);
+        writeApk(apk, true, digestDe(apk, "SHA-256"));
+        assertEquals("OK", ApkSigBlock.verify(apk).integrity);
+        java.io.RandomAccessFile raf = new java.io.RandomAccessFile(apk, "rw");
+        raf.seek(10);
+        raf.write(raf.read() ^ 0xFF);
+        raf.close();
+        assertEquals("FALLA", ApkSigBlock.verify(apk).integrity);
+    }
+
+    @Test
+    public void estadosSinDigest() throws Exception {
+        File plano = new File(tmp.getRoot(), "plano2.apk");
+        writeApk(plano, false);
+        assertEquals("sin-bloque", ApkSigBlock.verify(plano).integrity);
+        File sinDig = new File(tmp.getRoot(), "sindig.apk");
+        writeApk(sinDig, true);
+        assertEquals("no-comprobable", ApkSigBlock.verify(sinDig).integrity);
+        assertEquals("sin-bloque",
+                ApkSigBlock.verify(new File(tmp.getRoot(), "noexiste.apk")).integrity);
+    }
+
+    static byte[] digestDe(File apk, String jca) throws Exception {
+        long[] loc = ApkSigBlock.locate(apk);
+        java.io.RandomAccessFile raf = new java.io.RandomAccessFile(apk, "r");
+        byte[] d = ApkSigBlock.contentDigest(raf, loc[0], loc[2], loc[3], loc[4], loc[5], jca);
+        raf.close();
+        return d;
+    }
+
     static void lp(ByteArrayOutputStream b, byte[] data) {
         ReaEngineTest.le32(b, data.length);
         b.write(data, 0, data.length);
     }
 
-    /** Mini-APK con o sin bloque de firma v2 sintético. */
+    /** Mini-APK con o sin bloque de firma v2 sintético (sin digests). */
     static void writeApk(File out, boolean sig) throws Exception {
+        writeApk(out, sig, null);
+    }
+
+    /** Mini-APK con bloque v2 y un digest SHA-256 (puede ser null). */
+    static void writeApk(File out, boolean sig, byte[] digest) throws Exception {
         ByteArrayOutputStream b = new ByteArrayOutputStream();
         byte[] name = "a.txt".getBytes("UTF-8");
         byte[] data = "hi".getBytes("UTF-8");
@@ -77,7 +126,17 @@ public class ApkSigBlockTest {
             ByteArrayOutputStream certs = new ByteArrayOutputStream();
             lp(certs, FAKE_CERT);
             ByteArrayOutputStream sd = new ByteArrayOutputStream();
-            lp(sd, new byte[0]);
+            if (digest == null) {
+                lp(sd, new byte[0]);
+            } else {
+                ByteArrayOutputStream rec = new ByteArrayOutputStream();
+                ReaEngineTest.le32(rec, 0x0101);
+                ReaEngineTest.le32(rec, digest.length);
+                rec.write(digest, 0, digest.length);
+                ByteArrayOutputStream dig = new ByteArrayOutputStream();
+                lp(dig, rec.toByteArray());
+                lp(sd, dig.toByteArray());
+            }
             lp(sd, certs.toByteArray());
             lp(sd, new byte[0]);
             ByteArrayOutputStream signer = new ByteArrayOutputStream();

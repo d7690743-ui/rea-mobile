@@ -1,6 +1,8 @@
 package com.nexos.reamobile
 
 import java.io.File
+import java.util.Collections
+import java.util.LinkedHashMap
 
 /** Caché de sesión entre pantallas (se libera al re-analizar o salir del visor). */
 object Session {
@@ -9,9 +11,21 @@ object Session {
     var appClasses: List<String> = emptyList()
     var appClassTotal: Int = 0
     var dexBytes: List<ByteArray> = emptyList()
-    val smaliCache = LinkedHashMap<String, String>()
+    /** Tope de clases por caché (H6): LRU, sincronizado, con instantáneas. */
+    const val MAX_CACHE_CLASSES = 400
+    private fun <K, V> lru(): MutableMap<K, V> = Collections.synchronizedMap(
+        object : LinkedHashMap<K, V>(64, 0.75f, true) {
+            override fun removeEldestEntry(e: Map.Entry<K, V>): Boolean =
+                size > MAX_CACHE_CLASSES
+        })
+    val smaliCache: MutableMap<String, String> = lru()
     var smaliTruncated = false
-    val jadxCache = LinkedHashMap<String, String>()
+    val jadxCache: MutableMap<String, String> = lru()
+    /** Instantáneas para iterar sin ConcurrentModificationException. */
+    fun smaliSnapshot(): LinkedHashMap<String, String> =
+        synchronized(smaliCache) { LinkedHashMap(smaliCache) }
+    fun jadxSnapshot(): LinkedHashMap<String, String> =
+        synchronized(jadxCache) { LinkedHashMap(jadxCache) }
     var jadxErrors = 0
     var jadxTruncated = false
     var jadxDone = false
@@ -28,6 +42,9 @@ object Session {
     /** Análisis/extracción en curso (globales: impiden doble trabajo entre instancias). */
     @Volatile var analyzing = false
     @Volatile var extracting = false
+    /** Informe completo cacheado (H8): se reutiliza si el APK no cambió. */
+    var lastFullReport: String? = null
+    var lastFullReportKey: String = ""
 
     /** Tope de caracteres por vista de texto (H5): el dato completo sigue en caché. */
     const val MAX_VIEW_CHARS = 500000
@@ -55,5 +72,7 @@ object Session {
         jadxRunning = false
         jadxProgressMsg = ""
         jadxSecrets = 0
+        lastFullReport = null
+        lastFullReportKey = ""
     }
 }

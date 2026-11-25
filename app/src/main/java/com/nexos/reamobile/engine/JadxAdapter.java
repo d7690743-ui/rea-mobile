@@ -843,7 +843,6 @@ public final class JadxAdapter {
                 }
                 acc.sources.put(e.getKey(), code);
             }
-            System.gc();
         }
         if (acc.sources.isEmpty() && acc.error == null) acc.error = "sin clases extraídas";
         return acc;
