@@ -154,6 +154,9 @@ git add settings.gradle build.gradle gradle.properties .gitignore \
   app/src/main/java/com/nexos/reamobile/Session.kt \
   app/src/test/java/com/nexos/reamobile/SessionCacheTest.kt \
   app/src/main/java/com/nexos/reamobile/CodeViewerActivity.kt \
+  app/src/main/java/com/nexos/reamobile/ree/ReaTermuxBridge.java \
+  app/src/main/java/com/nexos/reamobile/ree/ReaTermuxReceiver.java \
+  app/src/test/java/com/nexos/reamobile/ree/ReaTermuxBridgeTest.java \
   docs/FASE3_MOTOR_PROPIO.md \
   docs/FASE5_MATRIZ.md \
   .github/workflows/build-apk.yml \
