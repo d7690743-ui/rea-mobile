@@ -5,7 +5,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.RandomAccessFile;
 import java.security.MessageDigest;
 import java.security.cert.Certificate;
@@ -48,6 +50,8 @@ public final class ReaEngine {
     private static final int MAX_LAYOUTS = 200;
     private static final int MAX_LAYOUT_BYTES = 1024 * 1024;
     private static final int MAX_SAMPLE = 50;
+    /** S5: tope de entradas de inventario/árbol (con nota de parcialidad). */
+    public static final int MAX_ENTRIES = 100000;
     private static final int MANIFEST_TEXT_CAP = 6000;
 
     private static final Pattern URL_RE = Pattern.compile("https?://[^\\s\"'<>]{4,200}", Pattern.CASE_INSENSITIVE);
@@ -907,7 +911,7 @@ public final class ReaEngine {
             ZipFile zip = new ZipFile(apk);
             try {
                 byte[] manifestBytes = null;
-                byte[] arscBytes = null;
+                boolean hasArsc = false;
                 List<String> dexNames = new ArrayList<>();
                 List<String> layoutNames = new ArrayList<>();
                 List<String> soNames = new ArrayList<>();
@@ -916,10 +920,14 @@ public final class ReaEngine {
                 while (en.hasMoreElements()) {
                     ZipEntry e = en.nextElement();
                     if (e.isDirectory()) continue;
+                    if (r.entryCount >= MAX_ENTRIES) {
+                        noteOnce(r, "inventario parcial: tope 100000 entradas");
+                        break;
+                    }
                     String name = e.getName();
                     r.entryCount++;
                     if (name.equals("AndroidManifest.xml")) manifestBytes = readEntry(zip, e, 20 * 1024 * 1024);
-                    else if (name.equals("resources.arsc")) arscBytes = readEntry(zip, e, 100 * 1024 * 1024);
+                    else if (name.equals("resources.arsc")) hasArsc = true;
                     else if (name.matches("classes\\d*\\.dex")) dexNames.add(name);
                     else if (name.startsWith("lib/") && name.endsWith(".so")) soNames.add(name);
                     else if (name.startsWith("META-INF/") && name.matches(".*\\.(RSA|DSA|EC|rsa|dsa|ec)$"))
@@ -964,6 +972,7 @@ public final class ReaEngine {
                 } else {
                     r.manifestNote = "ausente";
                 }
+                manifestBytes = null; // M-04: liberar antes del bucle DEX.
 
                 // DEX.
                 for (String dexName : dexNames) {
@@ -980,6 +989,7 @@ public final class ReaEngine {
                         r.dexNotes.add(dexName + ": " + di.error);
                         continue;
                     }
+                    if (di.headerNote != null) r.dexNotes.add(dexName + ": " + di.headerNote);
                     r.totalStrings += di.stringCount;
                     r.totalClasses += di.classCount;
                     r.totalMethods += di.methodCount;
@@ -1026,7 +1036,12 @@ public final class ReaEngine {
                     if (r.alfaScreens.size() >= MAX_LAYOUTS) break;
                 }
 
-                // ARSC.
+                // ARSC (lectura diferida: evita retener 100MB durante el bucle DEX).
+                byte[] arscBytes = null;
+                if (hasArsc) {
+                    ZipEntry ae = zip.getEntry("resources.arsc");
+                    if (ae != null) arscBytes = readEntry(zip, ae, 100 * 1024 * 1024);
+                }
                 if (arscBytes != null) {
                     r.recArscPresent = true;
                     ArscStrings.ArscInfo ai = ArscStrings.parse(arscBytes);
@@ -1049,6 +1064,7 @@ public final class ReaEngine {
                         }
                     } catch (Throwable ignored) {
                     }
+                    arscBytes = null;
                 }
 
                 // Nativas: inventario + arquitectura por cabecera ELF + etiqueta conocida.
@@ -1381,7 +1397,12 @@ public final class ReaEngine {
         try {
             if (r == null || usedPermSet == null) return;
             DexCalls.Result cr = DexCalls.collect(dexBytes, pkgSlash, dexName, pkgSlash != null);
-            r.superMap.putAll(cr.supers);
+            if (!cr.supers.isEmpty() && r.superMap.size() < DexCalls.MAX_SUPERS) {
+                for (Map.Entry<String, String> se : cr.supers.entrySet()) {
+                    if (r.superMap.size() >= DexCalls.MAX_SUPERS) break;
+                    if (!r.superMap.containsKey(se.getKey())) r.superMap.put(se.getKey(), se.getValue());
+                }
+            }
             r.graph.addAll(cr.edges);
             r.stringRefs.addAll(cr.strings);
             for (DexCalls.Edge e : cr.edges) {
@@ -1400,6 +1421,7 @@ public final class ReaEngine {
                 }
             }
             if (cr.truncated) r.dexNotes.add("llamadas: topes alcanzados (muestra parcial)");
+            if (cr.supersTruncated) noteOnce(r, "supers: topes alcanzados (muestra parcial)");
             if (cr.stringsTruncated) noteOnce(r, "cadenas: topes alcanzados (muestra parcial)");
             collectFlow(r, dexBytes, cr, dexName);
             // Sensibles invocadas desde librerías (adrt…) al grafo.
@@ -1577,6 +1599,23 @@ public final class ReaEngine {
         StringBuilder sb = new StringBuilder(b.length * 2);
         for (byte x : b) sb.append(String.format("%02x", x & 0xFF));
         return sb.toString();
+    }
+
+    /**
+     * Copia con tope (S4): lanza IOException si supera maxBytes. No cierra
+     * los flujos (lo hace el llamador). Nunca retorna parcial silencioso.
+     */
+    public static void copyCapped(InputStream in, OutputStream out, long maxBytes)
+            throws IOException {
+        byte[] buf = new byte[262144];
+        long total = 0;
+        while (true) {
+            int n = in.read(buf);
+            if (n < 0) break;
+            total += n;
+            if (total > maxBytes) throw new IOException("tope superado (" + maxBytes + " B)");
+            out.write(buf, 0, n);
+        }
     }
 
     private static byte[] readEntry(ZipFile zip, ZipEntry e, long max) {
@@ -1812,12 +1851,20 @@ public final class ReaEngine {
                 int layoutOk = 0;
                 try {
                     StringBuilder tree = new StringBuilder();
+                    int treeEntries = 0;
                     Enumeration<? extends ZipEntry> en = zip.entries();
                     while (en.hasMoreElements()) {
                         ZipEntry e = en.nextElement();
                         if (e.isDirectory()) continue;
                         String name = e.getName();
-                        tree.append(name).append(" (").append(e.getSize()).append(" B)\n");
+                        if (treeEntries < MAX_ENTRIES) {
+                            tree.append(name).append(" (").append(e.getSize()).append(" B)\n");
+                            treeEntries++;
+                        } else if (treeEntries == MAX_ENTRIES) {
+                            tree.append("[...inventario parcial: tope 100000 entradas...]\n");
+                            r.notes.add("árbol parcial: tope 100000 entradas");
+                            treeEntries++;
+                        }
                         if (e.getSize() > MAX_COPY_ENTRY) {
                             r.notes.add(name + ": no copiado (>80MB)");
                             continue;

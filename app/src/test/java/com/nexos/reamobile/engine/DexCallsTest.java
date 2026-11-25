@@ -94,6 +94,98 @@ public class DexCallsTest {
     }
 
     /** DEX mínimo con un invoke-static a Runtime.exec + return-void. */
+    @Test
+    public void supersAcotados() {
+        byte[] dex = buildManyClassDex(DexCalls.MAX_SUPERS + 6);
+        DexCalls.Result r = DexCalls.collect(dex, null);
+        assertEquals(DexCalls.MAX_SUPERS, r.supers.size());
+        assertTrue(r.supersTruncated);
+    }
+
+    /** DEX con N clases sin código (cadena de supers C1→C0, C2→C0…), para M-01. */
+    static byte[] buildManyClassDex(int n) {
+        SmaliExtractTest.DexBuilder d = new SmaliExtractTest.DexBuilder();
+        d.bytes(new byte[]{'d', 'e', 'x', '\n', '0', '3', '5', 0});
+        d.u32(0);
+        for (int i = 0; i < 20; i++) d.u8(0);
+        int pFileSize = d.pos;
+        d.u32(0);
+        d.u32(0x70);
+        d.u32(0x12345678);
+        d.u32(0);
+        d.u32(0);
+        int pMapOff = d.pos;
+        d.u32(0);
+        d.u32(n + 1);
+        int pStrOff = d.pos;
+        d.u32(0);
+        d.u32(n + 1);
+        int pTypeOff = d.pos;
+        d.u32(0);
+        d.u32(0);
+        d.u32(0);
+        d.u32(0);
+        d.u32(0);
+        d.u32(0);
+        d.u32(0);
+        d.u32(n);
+        int pClsOff = d.pos;
+        d.u32(0);
+        int pDataSize = d.pos;
+        d.u32(0);
+        int pDataOff = d.pos;
+        d.u32(0);
+        int strIdsOff = d.pos;
+        d.setU32(pStrOff, strIdsOff);
+        int[] strIdPos = new int[n + 1];
+        for (int i = 0; i <= n; i++) {
+            strIdPos[i] = d.pos;
+            d.u32(0);
+        }
+        int typeIdsOff = d.pos;
+        d.setU32(pTypeOff, typeIdsOff);
+        for (int i = 0; i <= n; i++) d.u32(i);
+        int clsDefsOff = d.pos;
+        d.setU32(pClsOff, clsDefsOff);
+        for (int i = 0; i < n; i++) {
+            d.u32(i);
+            d.u32(1);
+            d.u32(i == 0 ? n : 0);
+            d.u32(0);
+            d.u32(0xFFFFFFFF);
+            d.u32(0);
+            d.u32(0);
+            d.u32(0);
+        }
+        int dataOff = d.pos;
+        d.setU32(pDataOff, dataOff);
+        for (int i = 0; i < n; i++) {
+            d.setU32(strIdPos[i], d.pos);
+            byte[] sb = ("Lx/C" + i + ";").getBytes(StandardCharsets.UTF_8);
+            d.uleb(sb.length);
+            d.bytes(sb);
+            d.u8(0);
+        }
+        d.setU32(strIdPos[n], d.pos);
+        byte[] ob = "Ljava/lang/Object;".getBytes(StandardCharsets.UTF_8);
+        d.uleb(ob.length);
+        d.bytes(ob);
+        d.u8(0);
+        d.align();
+        int mapOff = d.pos;
+        d.setU32(pMapOff, mapOff);
+        d.u32(6);
+        d.mapItem(0x0000, 1, 0);
+        d.mapItem(0x0001, n + 1, strIdsOff);
+        d.mapItem(0x0002, n + 1, typeIdsOff);
+        d.mapItem(0x0006, n, clsDefsOff);
+        d.mapItem(0x1000, 1, mapOff);
+        d.mapItem(0x2002, n + 1, dataOff);
+        d.setU32(pDataSize, d.pos - dataOff);
+        d.setU32(pFileSize, d.pos);
+        return d.finish();
+    }
+
     static byte[] buildInvokeDex() {
         String[] strs = {"Lcom/x/A;", "Ljava/lang/Object;", "foo", "A.java", "V", "exec",
                 "Ljava/lang/Runtime;"};

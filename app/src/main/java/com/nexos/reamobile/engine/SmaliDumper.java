@@ -19,6 +19,9 @@ public final class SmaliDumper {
     public static final int MAX_CLASSES = 1500;
     public static final int MAX_UNITS_PER_METHOD = 6000;
     public static final long MAX_TOTAL_BYTES = 40L * 1024 * 1024;
+    /** T2: cotas de emisión por clase y por método (se comprueban durante). */
+    public static final int MAX_CHARS_PER_CLASS = 2 * 1024 * 1024;
+    public static final int MAX_CHARS_PER_METHOD = 256 * 1024;
 
     // Visibles en el paquete para IrBuilder (Fase 3). Sin cambio de conducta.
     static final int F10x = 0, F12x = 1, F11n = 2, F11x = 3, F10t = 4, F20t = 5,
@@ -143,8 +146,7 @@ public final class SmaliDumper {
         byte[] buf;
         DexStrings strings;
         DexTypes types;
-        int[] mClass, mProto, mName;
-        int[] fClass, fType, fName;
+        int methodN, methodOff, fieldN, fieldOff;
         int protoOff, protoSize;
     }
 
@@ -200,6 +202,9 @@ public final class SmaliDumper {
                 dumpOne(dex, filterSlash, r, prefixCount);
             } catch (RuntimeException e) {
                 r.notes.add("dex omitido: " + e.getMessage());
+            } catch (OutOfMemoryError e) {
+                r.truncated = true;
+                r.notes.add("dex omitido (memoria)");
             }
         }
 
@@ -252,6 +257,9 @@ public final class SmaliDumper {
                 r.notes.add("smali: detenido (" + s.getMessage() + ")");
             } catch (RuntimeException e) {
                 r.notes.add("dex omitido: " + e.getMessage());
+            } catch (OutOfMemoryError e) {
+                r.truncated = true;
+                r.notes.add("dex omitido (memoria)");
             }
         }
     }
@@ -367,6 +375,8 @@ public final class SmaliDumper {
                 }
             } catch (RuntimeException e) {
                 // prueba con el siguiente dex
+            } catch (OutOfMemoryError e) {
+                // igual: la clase gigante no tumba la extracción
             }
         }
         return null;
@@ -413,6 +423,8 @@ public final class SmaliDumper {
                 r.dumped++;
             } catch (RuntimeException e) {
                 r.notes.add(cls + ": omitida (" + e.getMessage() + ")");
+            } catch (OutOfMemoryError e) {
+                r.notes.add(cls + ": omitida (memoria)");
             }
         }
     }
@@ -458,8 +470,48 @@ public final class SmaliDumper {
                 throw s;
             } catch (RuntimeException e) {
                 if (r.notes.size() < 200) r.notes.add(cls + ": omitida (" + e.getMessage() + ")");
+            } catch (OutOfMemoryError e) {
+                if (r.notes.size() < 200) r.notes.add(cls + ": omitida (memoria)");
             }
         }
+    }
+
+    /** Celda method_ids/field_ids perezosa (8B: u16,u16,u32). 0 si ilegible. Nunca lanza. */
+    private static int idCell(Tables t, int off, int n, int idx, int sub) {
+        try {
+            if (t == null || t.buf == null || idx < 0 || idx >= n || off < 0) return 0;
+            long q = (long) off + (long) idx * 8 + (sub == 2 ? 4 : sub == 1 ? 2 : 0);
+            int need = sub == 2 ? 4 : 2;
+            if (q > (long) t.buf.length - need) return 0;
+            int p = (int) q;
+            return sub == 2 ? u32(t.buf, p) : u16(t.buf, p);
+        } catch (Throwable ignored) {
+            return 0;
+        }
+    }
+
+    private static int mClassAt(Tables t, int idx) {
+        return idCell(t, t.methodOff, t.methodN, idx, 0);
+    }
+
+    private static int mProtoAt(Tables t, int idx) {
+        return idCell(t, t.methodOff, t.methodN, idx, 1);
+    }
+
+    private static int mNameAt(Tables t, int idx) {
+        return idCell(t, t.methodOff, t.methodN, idx, 2);
+    }
+
+    private static int fClassAt(Tables t, int idx) {
+        return idCell(t, t.fieldOff, t.fieldN, idx, 0);
+    }
+
+    private static int fTypeAt(Tables t, int idx) {
+        return idCell(t, t.fieldOff, t.fieldN, idx, 1);
+    }
+
+    private static int fNameAt(Tables t, int idx) {
+        return idCell(t, t.fieldOff, t.fieldN, idx, 2);
     }
 
     private static Tables buildTables(byte[] buf) {
@@ -477,26 +529,15 @@ public final class SmaliDumper {
         }
         t.strings = DexStrings.of(buf, stringOff, stringN);
         t.types = DexTypes.of(buf, typeOff, typeN, t.strings);
-        t.mClass = new int[methodN];
-        t.mProto = new int[methodN];
-        t.mName = new int[methodN];
-        for (int i = 0; i < methodN; i++) {
-            int q = methodOff + i * 8;
-            if (q + 8 > buf.length) break;
-            t.mClass[i] = u16(buf, q);
-            t.mProto[i] = u16(buf, q + 2);
-            t.mName[i] = u32(buf, q + 4);
+        if ((methodN > 0 && (methodOff < 0 || methodOff > buf.length))
+                || (fieldN > 0 && (fieldOff < 0 || fieldOff > buf.length))) {
+            throw new IllegalArgumentException("method/field_ids fuera del fichero");
         }
-        t.fClass = new int[fieldN];
-        t.fType = new int[fieldN];
-        t.fName = new int[fieldN];
-        for (int i = 0; i < fieldN; i++) {
-            int q = fieldOff + i * 8;
-            if (q + 8 > buf.length) break;
-            t.fClass[i] = u16(buf, q);
-            t.fType[i] = u16(buf, q + 2);
-            t.fName[i] = u32(buf, q + 4);
-        }
+        // M-03: métodos/campos perezosos (antes 6xint[<=1M] ~24MB por DEX).
+        t.methodN = methodN;
+        t.methodOff = methodOff;
+        t.fieldN = fieldN;
+        t.fieldOff = fieldOff;
         return t;
     }
 
@@ -582,21 +623,35 @@ public final class SmaliDumper {
             if (directN > 0) sb.append("\n# direct methods\n");
             int mIdx = 0;
             int[] counts = new int[1];
-            for (int i = 0; i < directN && methods < 2000; i++) {
+            boolean cut = false;
+            for (int i = 0; i < directN && methods < 2000 && !cut; i++) {
+                if (sb.length() > MAX_CHARS_PER_CLASS) {
+                    cut = true;
+                    break;
+                }
                 int[] rr = readMethod(dex, p);
                 mIdx += rr[0];
                 p = rr[3];
-                methods += renderMethod(dex, t, sb, mIdx, rr[1], rr[2], counts, annots);
+                methods += renderMethodCapped(dex, t, sb, mIdx, rr[1], rr[2], counts, annots);
             }
             if (virtualN > 0) sb.append("\n# virtual methods\n");
             mIdx = 0;
-            for (int i = 0; i < virtualN && methods < 2000; i++) {
+            for (int i = 0; i < virtualN && methods < 2000 && !cut; i++) {
+                if (sb.length() > MAX_CHARS_PER_CLASS) {
+                    cut = true;
+                    break;
+                }
                 int[] rr = readMethod(dex, p);
                 mIdx += rr[0];
                 p = rr[3];
-                methods += renderMethod(dex, t, sb, mIdx, rr[1], rr[2], counts, annots);
+                methods += renderMethodCapped(dex, t, sb, mIdx, rr[1], rr[2], counts, annots);
             }
-            if (directN + virtualN > methods) sb.append("# métodos recortados (tope 2000)\n");
+            if (cut) {
+                sb.append("# clase recortada (tope 2M caracteres)\n");
+                if (r.notes.size() < 200) r.notes.add(cls + ": recortada (tope 2M)");
+            } else if (directN + virtualN > methods) {
+                sb.append("# métodos recortados (tope 2000)\n");
+            }
             insns = counts[0];
         }
         r.classSummaries.add(cls + " | super=" + sup + " | metodos=" + methods + " | insns~" + insns);
@@ -812,8 +867,8 @@ public final class SmaliDumper {
     /** Referencia completa de campo "Lclase;->nombre:Tipo". Nunca lanza. */
     private static String fieldRef(Tables t, int idx) {
         try {
-            if (idx < 0 || idx >= t.fClass.length) return "campo#0x" + Integer.toHexString(idx);
-            return typeAt(t, t.fClass[idx]) + "->" + fieldName(t, idx);
+            if (idx < 0 || idx >= t.fieldN) return "campo#0x" + Integer.toHexString(idx);
+            return typeAt(t, fClassAt(t, idx)) + "->" + fieldName(t, idx);
         } catch (Throwable ignored) {
             return "campo#0x" + Integer.toHexString(idx);
         }
@@ -822,14 +877,14 @@ public final class SmaliDumper {
     /** Referencia completa de método. Nunca lanza. */
     private static String methodRef(Tables t, int idx) {
         try {
-            if (idx < 0 || idx >= t.mClass.length) return "metodo#0x" + Integer.toHexString(idx);
+            if (idx < 0 || idx >= t.methodN) return "metodo#0x" + Integer.toHexString(idx);
             String name;
             try {
-                name = t.strings.get(t.mName[idx]);
+                name = t.strings.get(mNameAt(t, idx));
             } catch (Throwable ignored) {
                 name = "?";
             }
-            return typeAt(t, t.mClass[idx]) + "->" + name + protoString(t, t.mProto[idx]);
+            return typeAt(t, mClassAt(t, idx)) + "->" + name + protoString(t, mProtoAt(t, idx));
         } catch (Throwable ignored) {
             return "metodo#0x" + Integer.toHexString(idx);
         }
@@ -1050,15 +1105,27 @@ public final class SmaliDumper {
     }
 
     /** Emite un método. Devuelve 1 y acumula instrucciones en counts[0]. */
+    /** renderMethod con tope por método (T2): recorta y re-cierra el bloque. Nunca lanza. */
+    private static int renderMethodCapped(byte[] dex, Tables t, StringBuilder sb, int mIdx, int acc,
+                                          int codeOff, int[] counts, AnnotDir annots) {
+        int start = sb.length();
+        int m = renderMethod(dex, t, sb, mIdx, acc, codeOff, counts, annots);
+        if (sb.length() - start > MAX_CHARS_PER_METHOD) {
+            sb.setLength(start + MAX_CHARS_PER_METHOD);
+            sb.append("\n    # [...método recortado: tope 256K caracteres...]\n.end method\n\n");
+        }
+        return m;
+    }
+
     private static int renderMethod(byte[] dex, Tables t, StringBuilder sb, int mIdx, int acc, int codeOff,
                                     int[] counts, AnnotDir annots) {
         String cls = "?";
         String name = "?";
         String proto = "()?";
-        if (mIdx >= 0 && mIdx < t.mClass.length) {
-            cls = typeAt(t, t.mClass[mIdx]);
-            name = t.strings.get(t.mName[mIdx]);
-            proto = protoString(t, t.mProto[mIdx]);
+        if (mIdx >= 0 && mIdx < t.methodN) {
+            cls = typeAt(t, mClassAt(t, mIdx));
+            name = t.strings.get(mNameAt(t, mIdx));
+            proto = protoString(t, mProtoAt(t, mIdx));
         }
         sb.append(".method ").append(accessStr(acc, 1)).append(name).append(proto).append('\n');
         String methodAnn = "";
@@ -1471,13 +1538,13 @@ public final class SmaliDumper {
     private static String methodFieldRef(Tables t, int idx, boolean field) {
         try {
             if (field) {
-                if (idx < 0 || idx >= t.fClass.length) return "#campo@0x" + Integer.toHexString(idx);
-                return typeAt(t, t.fClass[idx]) + "->" + t.strings.get(t.fName[idx])
-                        + ":" + typeAt(t, t.fType[idx]);
+                if (idx < 0 || idx >= t.fieldN) return "#campo@0x" + Integer.toHexString(idx);
+                return typeAt(t, fClassAt(t, idx)) + "->" + t.strings.get(fNameAt(t, idx))
+                        + ":" + typeAt(t, fTypeAt(t, idx));
             }
-            if (idx < 0 || idx >= t.mClass.length) return "#metodo@0x" + Integer.toHexString(idx);
-            return typeAt(t, t.mClass[idx]) + "->" + t.strings.get(t.mName[idx])
-                    + protoString(t, t.mProto[idx]);
+            if (idx < 0 || idx >= t.methodN) return "#metodo@0x" + Integer.toHexString(idx);
+            return typeAt(t, mClassAt(t, idx)) + "->" + t.strings.get(mNameAt(t, idx))
+                    + protoString(t, mProtoAt(t, idx));
         } catch (RuntimeException e) {
             return "#ref@0x" + Integer.toHexString(idx);
         }
@@ -1485,8 +1552,8 @@ public final class SmaliDumper {
 
     private static String fieldName(Tables t, int idx) {
         try {
-            if (idx < 0 || idx >= t.fClass.length) return "campo#0x" + Integer.toHexString(idx);
-            return t.strings.get(t.fName[idx]) + ":" + typeAt(t, t.fType[idx]);
+            if (idx < 0 || idx >= t.fieldN) return "campo#0x" + Integer.toHexString(idx);
+            return t.strings.get(fNameAt(t, idx)) + ":" + typeAt(t, fTypeAt(t, idx));
         } catch (RuntimeException e) {
             return "campo#0x" + Integer.toHexString(idx);
         }

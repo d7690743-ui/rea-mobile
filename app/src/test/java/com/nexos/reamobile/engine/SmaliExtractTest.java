@@ -218,6 +218,156 @@ public class SmaliExtractTest {
         zos.closeEntry();
     }
 
+    @Test
+    public void metodoGiganteRecortado() {
+        List<byte[]> dexes = new ArrayList<>();
+        dexes.add(buildHugeMethodDex(1, 40, 8192));
+        String smali = SmaliDumper.dumpSingleClass(dexes, "Lcom/x/H;");
+        assertNotNull(smali);
+        assertTrue(smali, smali.contains("[...método recortado: tope 256K caracteres...]"));
+        assertTrue(smali, smali.contains(".end method"));
+        assertTrue("len=" + smali.length(), smali.length() < 300000);
+    }
+
+    @Test
+    public void claseGiganteRecortada() {
+        List<byte[]> dexes = new ArrayList<>();
+        dexes.add(buildHugeMethodDex(10, 40, 8192));
+        String smali = SmaliDumper.dumpSingleClass(dexes, "Lcom/x/H;");
+        assertNotNull(smali);
+        assertTrue(smali, smali.contains("# clase recortada (tope 2M caracteres)"));
+        assertTrue("len=" + smali.length(), smali.length() < 2300000);
+    }
+
+    /** DEX T2: 1 clase con N métodos de M invoke-static a un nombre de L chars. */
+    static byte[] buildHugeMethodDex(int methods, int invokesPerMethod, int nameLen) {
+        StringBuilder ln = new StringBuilder("m");
+        for (int i = 1; i < nameLen; i++) ln.append('n');
+        String[] strs = {"Lcom/x/H;", "Ljava/lang/Object;", ln.toString(), "V"};
+        DexBuilder d = new DexBuilder();
+        d.bytes(new byte[]{'d', 'e', 'x', '\n', '0', '3', '5', 0});
+        d.u32(0);
+        for (int i = 0; i < 20; i++) d.u8(0);
+        int pFileSize = d.pos;
+        d.u32(0);
+        d.u32(0x70);
+        d.u32(0x12345678);
+        d.u32(0);
+        d.u32(0);
+        int pMapOff = d.pos;
+        d.u32(0);
+        d.u32(strs.length);
+        int pStrOff = d.pos;
+        d.u32(0);
+        d.u32(3);
+        int pTypeOff = d.pos;
+        d.u32(0);
+        d.u32(1);
+        int pProtoOff = d.pos;
+        d.u32(0);
+        d.u32(0);
+        d.u32(0);
+        d.u32(methods);
+        int pMethOff = d.pos;
+        d.u32(0);
+        d.u32(1);
+        int pClsOff = d.pos;
+        d.u32(0);
+        int pDataSize = d.pos;
+        d.u32(0);
+        int pDataOff = d.pos;
+        d.u32(0);
+        int strIdsOff = d.pos;
+        d.setU32(pStrOff, strIdsOff);
+        int[] strIdPos = new int[strs.length];
+        for (int i = 0; i < strs.length; i++) {
+            strIdPos[i] = d.pos;
+            d.u32(0);
+        }
+        int typeIdsOff = d.pos;
+        d.setU32(pTypeOff, typeIdsOff);
+        d.u32(0);
+        d.u32(1);
+        d.u32(3);
+        int protoIdsOff = d.pos;
+        d.setU32(pProtoOff, protoIdsOff);
+        d.u32(2);
+        d.u32(2);
+        d.u32(0);
+        int methIdsOff = d.pos;
+        d.setU32(pMethOff, methIdsOff);
+        for (int i = 0; i < methods; i++) {
+            d.u16(0);
+            d.u16(0);
+            d.u32(2);
+        }
+        int clsDefsOff = d.pos;
+        d.setU32(pClsOff, clsDefsOff);
+        d.u32(0);
+        d.u32(1);
+        d.u32(1);
+        d.u32(0);
+        d.u32(3);
+        d.u32(0);
+        int pClassData = d.pos;
+        d.u32(0);
+        d.u32(0);
+        int dataOff = d.pos;
+        d.setU32(pDataOff, dataOff);
+        for (int i = 0; i < strs.length; i++) {
+            d.setU32(strIdPos[i], d.pos);
+            byte[] sb = strs[i].getBytes(StandardCharsets.UTF_8);
+            d.uleb(sb.length);
+            d.bytes(sb);
+            d.u8(0);
+        }
+        int[] codes = new int[methods];
+        for (int m = 0; m < methods; m++) {
+            d.align();
+            codes[m] = d.pos;
+            d.u16(1);
+            d.u16(0);
+            d.u16(0);
+            d.u16(0);
+            d.u32(0);
+            d.u32(invokesPerMethod * 3 + 1);
+            for (int k = 0; k < invokesPerMethod; k++) {
+                d.u16(0x1071);
+                d.u16(0);
+                d.u16(0);
+            }
+            d.u16(0x000e);
+        }
+        int cd = d.pos;
+        d.setU32(pClassData, cd);
+        d.uleb(0);
+        d.uleb(0);
+        d.uleb(methods);
+        d.uleb(0);
+        for (int m = 0; m < methods; m++) {
+            d.uleb(m == 0 ? 0 : 1);
+            d.uleb(0x9);
+            d.uleb(codes[m]);
+        }
+        d.align();
+        int mapOff = d.pos;
+        d.setU32(pMapOff, mapOff);
+        d.u32(10);
+        d.mapItem(0x0000, 1, 0);
+        d.mapItem(0x0001, strs.length, strIdsOff);
+        d.mapItem(0x0002, 3, typeIdsOff);
+        d.mapItem(0x0003, 1, protoIdsOff);
+        d.mapItem(0x0005, methods, methIdsOff);
+        d.mapItem(0x0006, 1, clsDefsOff);
+        d.mapItem(0x1000, 1, mapOff);
+        d.mapItem(0x2000, 1, cd);
+        d.mapItem(0x2001, methods, codes[0]);
+        d.mapItem(0x2002, strs.length, dataOff);
+        d.setU32(pDataSize, d.pos - dataOff);
+        d.setU32(pFileSize, d.pos);
+        return d.finish();
+    }
+
     /** DEX mínimo: 1 clase Lcom/x/A; con foo(), bar(), sw(), pk(), br(), iv(), ip() y q5(). Con mapa válido. */
     static byte[] buildTestDex() {
         String[] strs = {"Lcom/x/A;", "Ljava/lang/Object;", "foo", "A.java", "V", "bar", "hello", "sw", "pk", "br", "iv", "ip", "q5"};
@@ -900,6 +1050,11 @@ public class SmaliExtractTest {
         int pos = 0;
 
         void u8(int v) {
+            if (pos >= b.length) {
+                byte[] nb = new byte[b.length * 2];
+                System.arraycopy(b, 0, nb, 0, b.length);
+                b = nb;
+            }
             b[pos++] = (byte) v;
         }
 
@@ -916,6 +1071,11 @@ public class SmaliExtractTest {
         }
 
         void bytes(byte[] d) {
+            while (pos + d.length > b.length) {
+                byte[] nb = new byte[b.length * 2];
+                System.arraycopy(b, 0, nb, 0, b.length);
+                b = nb;
+            }
             System.arraycopy(d, 0, b, pos, d.length);
             pos += d.length;
         }

@@ -3,15 +3,20 @@ package com.nexos.reamobile.engine;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -435,6 +440,37 @@ public class ReaEngineTest {
         FileOutputStream fos = new FileOutputStream(out);
         fos.write(b.toByteArray());
         fos.close();
+    }
+
+    @Test
+    public void copiaConTope() throws Exception {
+        byte[] data = new byte[1000];
+        ByteArrayOutputStream ok = new ByteArrayOutputStream();
+        ReaEngine.copyCapped(new ByteArrayInputStream(data), ok, 1000);
+        assertEquals(1000, ok.size());
+        try {
+            ReaEngine.copyCapped(new ByteArrayInputStream(data), new ByteArrayOutputStream(), 999);
+            assertTrue("debió lanzar", false);
+        } catch (IOException e) {
+            assertTrue(e.getMessage().contains("tope"));
+        }
+    }
+
+    @Test
+    public void inventarioAcotado() throws Exception {
+        File apk = new File(tmp.getRoot(), "many.zip");
+        ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(apk));
+        for (int i = 0; i < ReaEngine.MAX_ENTRIES + 5; i++) {
+            zos.putNextEntry(new ZipEntry("f" + i + ".dat"));
+            zos.closeEntry();
+        }
+        zos.putNextEntry(new ZipEntry("AndroidManifest.xml"));
+        zos.write("no-es-axml".getBytes(StandardCharsets.UTF_8));
+        zos.closeEntry();
+        zos.close();
+        ReaEngine.ApkReport r = ReaEngine.analyze(apk);
+        assertTrue(r.dexNotes.toString(), r.dexNotes.toString().contains("inventario parcial"));
+        assertTrue(r.entryCount <= ReaEngine.MAX_ENTRIES);
     }
 
     static void le16(ByteArrayOutputStream b, int v) {

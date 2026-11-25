@@ -248,7 +248,7 @@ class CodeViewerActivity : Activity() {
         }
         val log = Session.jadxLog
         code.text = if (log.isEmpty()) "(log vacío: aún no se descompila)"
-        else log.joinToString("\n")
+        else Session.capForView(log.joinToString("\n"))
     }
 
     private fun showCode() {
@@ -260,7 +260,7 @@ class CodeViewerActivity : Activity() {
         if (modeSmali) {
             val smali = Session.smaliCache[sel]
             if (smali != null) {
-                code.text = smali
+                code.text = Session.capForView(smali)
             } else {
                 code.text = "(dump smali parcial…)"
                 dumpSingle(sel)
@@ -285,7 +285,8 @@ class CodeViewerActivity : Activity() {
                 }
             }
             if (!text.isNullOrBlank()) {
-                code.text = (if (viaOuter != null) "// (esta clase va incluida en $viaOuter)\n\n" else "") + text
+                code.text = Session.capForView(
+                    (if (viaOuter != null) "// (esta clase va incluida en $viaOuter)\n\n" else "") + text)
             } else if (working || Session.jadxRunning) {
                 val prog = Session.jadxProgressMsg.ifEmpty { "descompilando…" }
                 code.text = "(descompilando… $prog — la vista se actualizará sola)"
@@ -313,7 +314,9 @@ class CodeViewerActivity : Activity() {
             runOnUiThread {
                 markWorking(false)
                 progress.visibility = View.GONE
-                if (selected == desc && modeSmali) code.text = text ?: "(sin smali)"
+                if (selected == desc && modeSmali) {
+                    code.text = text?.let { Session.capForView(it) } ?: "(sin smali)"
+                }
             }
         }.start()
     }
@@ -655,7 +658,12 @@ class CodeViewerActivity : Activity() {
                         val en = zip.entries()
                         while (en.hasMoreElements()) {
                             val e = en.nextElement()
-                            if (!e.isDirectory) tree.add(e.name + " (" + e.size + " B)")
+                            if (e.isDirectory) continue
+                            if (tree.size >= ReaEngine.MAX_ENTRIES) {
+                                tree.add("[...inventario parcial: tope 100000 entradas...]")
+                                break
+                            }
+                            tree.add(e.name + " (" + e.size + " B)")
                         }
                     }
                     tree.sort()

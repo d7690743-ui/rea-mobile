@@ -1,11 +1,13 @@
 package com.nexos.reamobile.engine;
 
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.zip.Adler32;
 
 /**
  * Parser mínimo de DEX: cabecera, strings (MUTF-8), tipos, clases y métodos.
@@ -19,6 +21,8 @@ public final class DexParser {
     public static final int MAX_CLASSES = 10000;
     public static final int MAX_METHODS_SAMPLE = 2000;
     public static final int MAX_SUSPICIOUS = 200;
+    /** T3: tope de caracteres por string (un DEX sin NUL no cuelga el análisis). */
+    public static final int MAX_STRING_CHARS = 8192;
 
     public static class ClassInfo {
         public String name = "?";
@@ -47,6 +51,8 @@ public final class DexParser {
         public boolean hasUnity;
         public double obfuscatedRatio;
         public String error;
+        /** Aviso no fatal: file_size/checksum/signature discrepantes (L-02). */
+        public String headerNote;
     }
 
     /** Patrones de API sensible: {prefijoDeClase, contieneEnFirma}. */
@@ -93,6 +99,11 @@ public final class DexParser {
                 info.error = "endian no soportado";
                 return info;
             }
+            if (u32(buf, 36) != 0x70) {
+                info.error = "cabecera dex inválida";
+                return info;
+            }
+            info.headerNote = headerIntegrityNote(buf);
             int stringIdsSize = u32(buf, 56);
             int stringIdsOff = u32(buf, 60);
             int typeIdsSize = u32(buf, 64);
@@ -176,6 +187,33 @@ public final class DexParser {
         return info;
     }
 
+    /**
+     * Nota si file_size/checksum/signature discrepan de la cabecera (L-02).
+     * Best-effort: avisa, no falla. null si íntegro. Nunca lanza.
+     */
+    static String headerIntegrityNote(byte[] buf) {
+        try {
+            if (buf == null || buf.length < 0x70) return null;
+            StringBuilder nb = new StringBuilder();
+            if (u32(buf, 32) != buf.length) nb.append("file_size discrepa; ");
+            Adler32 adler = new Adler32();
+            adler.update(buf, 12, buf.length - 12);
+            if ((int) adler.getValue() != u32(buf, 8)) nb.append("checksum inválido; ");
+            MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
+            sha1.update(buf, 32, buf.length - 32);
+            byte[] sig = sha1.digest();
+            for (int i = 0; i < 20; i++) {
+                if (sig[i] != buf[12 + i]) {
+                    nb.append("signature inválida; ");
+                    break;
+                }
+            }
+            return nb.length() == 0 ? null : nb.toString().trim();
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
     private static String readProto(byte[] buf, int protoOff, int protoSize, DexTypes types,
                                     int protoIdx) {
         try {
@@ -205,11 +243,22 @@ public final class DexParser {
 
     /** Decodifica MUTF-8 (incluye pares subrogados CESU-8) hasta 0x00. */
     static String decodeMutf8(byte[] buf, int start) {
+        return decodeMutf8(buf, start, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Variante acotada por utf16_size (unidades UTF-16 del string_data_item):
+     * nunca lee más allá de start + utf16len*3 + 3 ni más de MAX_STRING_CHARS.
+     * Nunca lanza.
+     */
+    static String decodeMutf8(byte[] buf, int start, int utf16len) {
         StringBuilder sb = new StringBuilder();
+        if (utf16len < 0) utf16len = Integer.MAX_VALUE;
+        long byteBound = (long) start + (long) utf16len * 3 + 3;
         int p = start;
-        int guard = 0;
-        while (p < buf.length && guard < 100000) {
-            guard++;
+        int count = 0;
+        while (p < buf.length && (long) p < byteBound && count < MAX_STRING_CHARS) {
+            count++;
             int a = buf[p++] & 0xFF;
             if (a == 0) break;
             if (a < 0x80) {

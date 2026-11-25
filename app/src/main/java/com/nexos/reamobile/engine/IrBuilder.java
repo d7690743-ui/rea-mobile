@@ -276,12 +276,19 @@ public final class IrBuilder {
         }
         bounds.sort(null);
         Map<Integer, Integer> blockOf = new LinkedHashMap<>();
+        Map<Integer, Integer> posOf = new LinkedHashMap<>();
+        for (int i = 0; i < code.size(); i++) posOf.put(code.get(i).addr, i);
         for (int b = 0; b < bounds.size(); b++) {
             Block bl = new Block();
             bl.start = bounds.get(b);
             bl.end = (b + 1 < bounds.size()) ? bounds.get(b + 1) : n;
-            for (Insn in : code) {
-                if (in.addr >= bl.start && in.addr < bl.end) bl.insns.add(in);
+            Integer from = posOf.get(bl.start);
+            if (from != null) {
+                for (int i = from; i < code.size(); i++) {
+                    Insn in = code.get(i);
+                    if (in.addr >= bl.end) break;
+                    bl.insns.add(in);
+                }
             }
             if (!bl.insns.isEmpty()) {
                 bl.id = r.blocks.size();

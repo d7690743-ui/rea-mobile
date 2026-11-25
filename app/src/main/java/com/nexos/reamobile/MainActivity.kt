@@ -22,6 +22,7 @@ import com.nexos.reamobile.engine.ReaEngine
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.security.MessageDigest
 
 /** Pantalla única: abrir APK por SAF, analizar, extraer ZIP y compartir informe. */
@@ -36,7 +37,6 @@ class MainActivity : Activity() {
     private lateinit var progress: ProgressBar
     private var lastReport: String = ""
     private var lastApk: File? = null
-    private var analyzing = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,7 +90,7 @@ class MainActivity : Activity() {
         )
         setContentView(root)
 
-        btnPick.setOnClickListener { if (!analyzing) openPicker() }
+        btnPick.setOnClickListener { if (!Session.analyzing && !Session.extracting) openPicker() }
         btnShare.setOnClickListener { shareReport() }
         btnExtract.setOnClickListener { extractZip() }
         btnShareZip.setOnClickListener { shareZip() }
@@ -151,7 +151,8 @@ class MainActivity : Activity() {
     }
 
     private fun analyzeUri(uri: Uri) {
-        analyzing = true
+        if (Session.analyzing || Session.extracting) return
+        Session.analyzing = true
         btnShare.isEnabled = false
         btnExtract.isEnabled = false
         btnShareZip.isEnabled = false
@@ -162,8 +163,19 @@ class MainActivity : Activity() {
             try {
                 val input = contentResolver.openInputStream(uri)
                     ?: throw IllegalStateException("sin acceso al archivo")
-                val tmp = File(cacheDir, "rea_input.apk")
-                FileOutputStream(tmp).use { out -> input.use { it.copyTo(out) } }
+                val tmp = File(cacheDir, "rea_input_" + System.currentTimeMillis() + ".apk")
+                cleanStaleTemps(tmp)
+                try {
+                    FileOutputStream(tmp).use { out ->
+                        input.use { ReaEngine.copyCapped(it, out, 512L * 1024 * 1024) }
+                    }
+                } catch (e: IOException) {
+                    try {
+                        tmp.delete()
+                    } catch (t: Throwable) {
+                    }
+                    throw IllegalStateException("APK mayor de 512 MB o ilegible")
+                }
                 val report = ReaEngine.analyze(tmp)
                 val pmSection = packageManagerSection(tmp.absolutePath)
                 lastReport = report.toText() + "\n" + pmSection
@@ -174,7 +186,7 @@ class MainActivity : Activity() {
                     Session.appClasses = report.appClasses
                     Session.appClassTotal = report.appClassTotal
                     Session.resetCache()
-                    txt.text = lastReport
+                    txt.text = Session.capForView(lastReport)
                     btnShare.isEnabled = true
                     btnExtract.isEnabled = true
                     btnView.isEnabled = true
@@ -191,15 +203,15 @@ class MainActivity : Activity() {
                     progress.visibility = View.GONE
                 }
             } finally {
-                analyzing = false
+                Session.analyzing = false
             }
         }.start()
     }
 
     private fun extractZip() {
         val apk = lastApk
-        if (analyzing || apk == null || !apk.isFile()) return
-        analyzing = true
+        if (Session.analyzing || Session.extracting || apk == null || !apk.isFile()) return
+        Session.extracting = true
         btnPick.isEnabled = false
         btnShare.isEnabled = false
         btnExtract.isEnabled = false
@@ -208,14 +220,17 @@ class MainActivity : Activity() {
         txt.text = "Extrayendo…"
         Thread {
             try {
-                val out = File(cacheDir, "rea_extraccion.zip")
+                val tmpZip = File(cacheDir, "rea_extraccion_" + System.currentTimeMillis() + ".zip")
+                cleanStaleTemps(tmpZip)
+                val res = ReaEngine.extractToZip(apk, tmpZip)
+                val out = File(cacheDir, ZipShareProvider.FILE_NAME)
                 if (out.exists()) out.delete()
-                val res = ReaEngine.extractToZip(apk, out)
+                if (!tmpZip.renameTo(out)) throw IllegalStateException("no se pudo publicar el ZIP")
                 if (res.error != null) throw IllegalStateException(res.error)
                 val dest = saveZipToDownloads(out, res.packageName)
                 val summary = "ZIP guardado: " + dest + "\n\n" + res.summary()
                 runOnUiThread {
-                    txt.text = summary + "\n" + lastReport
+                    txt.text = Session.capForView(summary + "\n" + lastReport)
                     btnShareZip.isEnabled = true
                     progress.visibility = View.GONE
                 }
@@ -230,7 +245,7 @@ class MainActivity : Activity() {
                     progress.visibility = View.GONE
                 }
             } finally {
-                analyzing = false
+                Session.extracting = false
                 runOnUiThread {
                     btnPick.isEnabled = true
                     btnShare.isEnabled = lastReport.isNotEmpty()
@@ -326,8 +341,24 @@ class MainActivity : Activity() {
     }
 
     private fun openViewer() {
-        if (analyzing || lastApk == null) return
+        if (Session.analyzing || Session.extracting || lastApk == null) return
         startActivity(Intent(this, CodeViewerActivity::class.java))
+    }
+
+    /** Borra temporales viejos de análisis/extracciones anteriores (best-effort). */
+    private fun cleanStaleTemps(keep: File?) {
+        try {
+            cacheDir.listFiles { f ->
+                (f.name.startsWith("rea_input_") || f.name.startsWith("rea_extraccion_")) && f != keep
+            }?.forEach {
+                try {
+                    it.delete()
+                } catch (t: Throwable) {
+                }
+            }
+            File(cacheDir, "rea_input.apk").delete()
+        } catch (t: Throwable) {
+        }
     }
 
     private fun shareReport() {

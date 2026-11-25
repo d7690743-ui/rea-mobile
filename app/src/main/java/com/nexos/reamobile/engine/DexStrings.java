@@ -72,7 +72,7 @@ public final class DexStrings {
             String s;
             try {
                 int[] r = AxmlDecoder.readUleb128(buf, dataOff);
-                s = DexParser.decodeMutf8(buf, r[1]);
+                s = DexParser.decodeMutf8(buf, r[1], r[0]);
                 if (s == null) s = "";
             } catch (RuntimeException e) {
                 s = "";

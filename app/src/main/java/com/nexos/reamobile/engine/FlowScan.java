@@ -244,7 +244,7 @@ public final class FlowScan {
             if (idPos + 4 > dex.length) break;
             try {
                 int[] rr = AxmlDecoder.readUleb128(dex, u32(dex, idPos));
-                strings[i] = DexParser.decodeMutf8(dex, rr[1]);
+                strings[i] = DexParser.decodeMutf8(dex, rr[1], rr[0]);
             } catch (RuntimeException e) {
                 strings[i] = "";
             }

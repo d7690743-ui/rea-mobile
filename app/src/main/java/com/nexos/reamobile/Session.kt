@@ -25,6 +25,19 @@ object Session {
     @Volatile var jadxProgressMsg = ""
     /** Secretos de alta señal hallados en el Java descompilado. */
     var jadxSecrets = 0
+    /** Análisis/extracción en curso (globales: impiden doble trabajo entre instancias). */
+    @Volatile var analyzing = false
+    @Volatile var extracting = false
+
+    /** Tope de caracteres por vista de texto (H5): el dato completo sigue en caché. */
+    const val MAX_VIEW_CHARS = 500000
+
+    /** Recorta para TextView con marcador; el original queda intacto. */
+    fun capForView(s: String): String {
+        if (s.length <= MAX_VIEW_CHARS) return s
+        return s.substring(0, MAX_VIEW_CHARS) + "\n\n[…vista recortada: " + s.length +
+            " caracteres en total…]"
+    }
 
     fun pkgSlash(): String = if (pkg == "?") "?/" else pkg.replace('.', '/') + "/"
 

@@ -20,6 +20,8 @@ public final class DexCalls {
     public static final int MAX_EDGES = 20000;
     public static final int MAX_STRINGREFS = 20000;
     public static final int MAX_CODEOFFS = 4000;
+    /** M-01: tope de entradas clase→super por DEX (con flag de truncado). */
+    public static final int MAX_SUPERS = 100000;
 
     public static class Edge {
         public String caller = "?";
@@ -52,6 +54,7 @@ public final class DexCalls {
         public boolean libTruncated;
         public boolean stringsTruncated;
         public boolean libStringsTruncated;
+        public boolean supersTruncated;
     }
 
     /**
@@ -97,14 +100,7 @@ public final class DexCalls {
             DexStrings strings = DexStrings.of(dex, stringOff, stringN);
             DexTypes types = DexTypes.of(dex, typeOff, typeN, strings);
             r.table = strings;
-            int[] mClass = new int[methodN];
-            int[] mName = new int[methodN];
-            for (int i = 0; i < methodN; i++) {
-                int q = methodOff + i * 8;
-                if (q + 8 > dex.length) break;
-                mClass[i] = u16(dex, q);
-                mName[i] = u32(dex, q + 4);
-            }
+            // M-03: method_ids perezoso vía midClass/midName (antes 2xint[<=1M]).
 
             int ownScanned = 0;
             int libScanned = 0;
@@ -117,7 +113,10 @@ public final class DexCalls {
                 String cls = types.get(u32(dex, p));
                 String sup = types.get(u32(dex, p + 8));
                 if (!"?".equals(cls) && !"?".equals(sup) && !cls.equals(sup)
-                        && !"Ljava/lang/Object;".equals(sup)) r.supers.put(cls, sup);
+                        && !"Ljava/lang/Object;".equals(sup)) {
+                    if (r.supers.size() < MAX_SUPERS) r.supers.put(cls, sup);
+                    else r.supersTruncated = true;
+                }
                 int dataOff = u32(dex, p + 24);
                 boolean own = pkgSlash == null || cls.startsWith("L" + pkgSlash);
                 if (own && ownDone) continue;
@@ -149,7 +148,7 @@ public final class DexCalls {
                                 ownDone = true;
                                 break;
                             }
-                            scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName,
+                            scanMethod(dex, r, cls, mIdx, rr[2], types, strings, methodOff, methodN,
                                     tag, true);
                             ownScanned++;
                         } else {
@@ -158,7 +157,7 @@ public final class DexCalls {
                                 libDone = true;
                                 break;
                             }
-                            scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName,
+                            scanMethod(dex, r, cls, mIdx, rr[2], types, strings, methodOff, methodN,
                                     tag, false);
                             libScanned++;
                         }
@@ -184,7 +183,7 @@ public final class DexCalls {
                                 ownDone = true;
                                 break;
                             }
-                            scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName,
+                            scanMethod(dex, r, cls, mIdx, rr[2], types, strings, methodOff, methodN,
                                     tag, true);
                             ownScanned++;
                         } else {
@@ -193,7 +192,7 @@ public final class DexCalls {
                                 libDone = true;
                                 break;
                             }
-                            scanMethod(dex, r, cls, mIdx, rr[2], types, strings, mClass, mName,
+                            scanMethod(dex, r, cls, mIdx, rr[2], types, strings, methodOff, methodN,
                                     tag, false);
                             libScanned++;
                         }
@@ -239,7 +238,7 @@ public final class DexCalls {
 
     /** Escanea un método; añade aristas (own→edges, ajenas→libEdges). */
     private static void scanMethod(byte[] dex, Result r, String cls, int mIdx, int codeOff,
-                                   DexTypes types, DexStrings strings, int[] mClass, int[] mName,
+                                   DexTypes types, DexStrings strings, int methodOff, int methodN,
                                    String dexName, boolean own) {
         if (codeOff == 0) return;
         check(dex, codeOff, 16);
@@ -247,7 +246,7 @@ public final class DexCalls {
         if (insnsSize < 0 || insnsSize > 1000000) return;
         int n = Math.min(insnsSize, MAX_UNITS);
         check(dex, codeOff + 16, n * 2);
-        String caller = cls + "->" + methodName(strings, mClass, mName, mIdx);
+        String caller = cls + "->" + methodName(strings, dex, methodOff, methodN, mIdx);
         if (own && r.codeOffs.size() < MAX_CODEOFFS && !r.codeOffs.containsKey(caller)) {
             r.codeOffs.put(caller, codeOff);
         }
@@ -261,10 +260,11 @@ public final class DexCalls {
             if (size <= 0 || p + size > n) break;
             if (SmaliDumper.REFS[op] == SmaliDumper.R_METHOD) {
                 int idx = u16(dex, codeOff + 16 + (p + 1) * 2);
-                if (idx >= 0 && idx < mClass.length && dst.size() < MAX_EDGES) {
+                if (idx >= 0 && idx < methodN && dst.size() < MAX_EDGES) {
                     Edge e = new Edge();
                     e.caller = caller;
-                    e.callee = types.get(mClass[idx]) + "->" + strings.get(mName[idx]);
+                    e.callee = types.get(midClass(dex, methodOff, methodN, idx))
+                            + "->" + strings.get(midName(dex, methodOff, methodN, idx));
                     e.dex = dexName;
                     e.pos = p;
                     dst.add(e);
@@ -349,9 +349,32 @@ public final class DexCalls {
         return new int[]{diff, a[0], a[0], a[1]};
     }
 
-    private static String methodName(DexStrings strings, int[] mClass, int[] mName, int idx) {
-        if (idx < 0 || idx >= mName.length) return "?";
-        return strings.get(mName[idx]);
+    private static String methodName(DexStrings strings, byte[] dex, int methodOff, int methodN,
+                                     int idx) {
+        if (idx < 0 || idx >= methodN) return "?";
+        return strings.get(midName(dex, methodOff, methodN, idx));
+    }
+
+    /** method_ids perezoso (8B: u16 clase, u16 proto, u32 nombre). 0 si ilegible. Nunca lanza. */
+    private static int midClass(byte[] dex, int methodOff, int methodN, int idx) {
+        return midCell(dex, methodOff, methodN, idx, 0);
+    }
+
+    private static int midName(byte[] dex, int methodOff, int methodN, int idx) {
+        return midCell(dex, methodOff, methodN, idx, 4);
+    }
+
+    private static int midCell(byte[] dex, int off, int n, int idx, int add) {
+        try {
+            if (dex == null || idx < 0 || idx >= n || off < 0) return 0;
+            long q = (long) off + (long) idx * 8 + add;
+            int need = add == 4 ? 4 : 2;
+            if (q > (long) dex.length - need) return 0;
+            int p = (int) q;
+            return add == 4 ? u32(dex, p) : u16(dex, p);
+        } catch (Throwable ignored) {
+            return 0;
+        }
     }
 
     private static int u16(byte[] b, int p) {

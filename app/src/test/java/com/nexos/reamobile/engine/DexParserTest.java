@@ -44,4 +44,24 @@ public class DexParserTest {
         sup.put("Lcom/x/B;", "Lcom/x/A;");
         assertTrue(DexParser.suspiciousLabelWithSupers("Lcom/x/A;", "exec", sup) == null);
     }
+
+    @Test
+    public void cabeceraEIntegridad() {
+        byte[] dex = SmaliExtractTest.buildTestDex();
+        // Íntegro: sin error ni nota.
+        DexParser.DexInfo ok = DexParser.parse(dex, "t");
+        assertTrue(ok.error == null);
+        assertTrue(ok.headerNote == null);
+        // header_size corrupto → error.
+        byte[] bad = dex.clone();
+        bad[36] = 0x71;
+        assertTrue(DexParser.parse(bad, "t").error != null);
+        // Byte flip cualquiera → nota de integridad (no fatal).
+        byte[] flip = dex.clone();
+        flip[200] ^= (byte) 0xFF;
+        DexParser.DexInfo e2 = DexParser.parse(flip, "t");
+        assertTrue(e2.error == null);
+        assertTrue(e2.headerNote != null);
+        assertTrue(e2.headerNote.contains("checksum"));
+    }
 }

@@ -54,4 +54,23 @@ public class DexStringsTest {
         assertNotNull(DexTypes.of(null, 0, 0, null).get(0));
         assertEquals("?", DexTypes.of(dex, 99999, 10, pool).get(0));
     }
+
+    @Test
+    public void stringSinNulAcotado() {
+        // T3: buffer sin 0x00 — antes leía hasta 100k chars; ahora 8k.
+        byte[] buf = new byte[200000];
+        java.util.Arrays.fill(buf, (byte) 'A');
+        assertEquals(DexParser.MAX_STRING_CHARS, DexParser.decodeMutf8(buf, 0).length());
+    }
+
+    @Test
+    public void respetaUtf16Size() {
+        byte[] buf = new byte[100000];
+        java.util.Arrays.fill(buf, (byte) 'B');
+        // utf16_size pequeño: no escanea los 100KB aunque no haya NUL.
+        assertTrue(DexParser.decodeMutf8(buf, 0, 5).length() <= 5 * 3 + 3);
+        // NUL real sigue terminando.
+        buf[3] = 0;
+        assertEquals(3, DexParser.decodeMutf8(buf, 0, 100000).length());
+    }
 }
