@@ -1,0 +1,9 @@
+{
+  "schema": "rea-allowlist-v1",
+  "id": "rea-bundled",
+  "version": "none",
+  "source": "bundled-empty: sin referencias oficiales. Importa una allowlist verificada para acreditar firmantes; sin ella el motor responde UNKNOWN, nunca acusa ni acredita.",
+  "updated": "",
+  "entries": [],
+  "lineages": []
+}

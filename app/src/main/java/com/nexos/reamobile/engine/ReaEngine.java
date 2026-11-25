@@ -30,6 +30,8 @@ import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
+import com.nexos.reamobile.engine.auth.AuthResult;
+import com.nexos.reamobile.engine.auth.ReaAuthenticityEngine;
 import com.nexos.reamobile.intelligence.IntelFinding;
 import com.nexos.reamobile.intelligence.IntelRegistry;
 
@@ -42,7 +44,7 @@ public final class ReaEngine {
     private ReaEngine() {
     }
 
-    public static final String VERSION = "0.4.3";
+    public static final String VERSION = "0.5.0";
     private static final long MAX_DEX_BYTES = 160L * 1024 * 1024;
     private static final int MAX_ELF_LIBS = 30;
     private static final int ELF_HEAD_CAP = 4 * 1024 * 1024;
@@ -136,6 +138,8 @@ public final class ReaEngine {
         public String sigCertSubject = "";
         /** true solo si el digest v2/v3 se verificó contra el contenido (S1-real). */
         public boolean sigVerified = false;
+        /** Autenticidad (motor independiente ReaAuthenticityEngine; null si no se calculó). */
+        public AuthResult.Report auth;
         public long libAppSize;
         public int libAppStrings;
         public List<String> libAppUrls = new ArrayList<>();
@@ -257,6 +261,12 @@ public final class ReaEngine {
             if (!sigCertSubject.isEmpty()) sb.append("certSujeto=").append(sigCertSubject).append('\n');
             sb.append("verificada=").append(sigVerified ? "sí" : "no (integridad digest: "
                     + sigIntegrity + "; cadena NO validada)").append('\n');
+            if (auth != null) {
+                try {
+                    sb.append(auth.toTextSection());
+                } catch (Throwable ignored) {
+                }
+            }
             sb.append("\n=== MANIFEST (").append(manifestNote).append(") ===\n");
             sb.append("permisos(").append(manifestPerms.size()).append(")\n");
             for (String p : manifestPerms) sb.append("  - ").append(p).append('\n');
@@ -680,6 +690,12 @@ public final class ReaEngine {
             jsonField(sb, "sigCertSubject", sigCertSubject, false);
             sb.append(",\"sigVerificada\":").append(sigVerified);
             jsonField(sb, "sigIntegridad", sigIntegrity, false);
+            sb.append(",\"authenticity\":");
+            try {
+                sb.append(auth == null ? "{}" : auth.toJson());
+            } catch (Throwable ignored) {
+                sb.append("{}");
+            }
             sb.append(",\"libAppSize\":").append(libAppSize);
             sb.append(",\"libAppStrings\":").append(libAppStrings);
             jsonStrList(sb, "libAppUrls", libAppUrls);
@@ -908,8 +924,42 @@ public final class ReaEngine {
         }
     }
 
-    /** Analiza un APK en disco. Nunca lanza: los fallos quedan en error/notas. */
+    /** Analiza un APK en disco (estático + autenticidad). Nunca lanza. */
     public static ApkReport analyze(File apk) {
+        return analyze(apk, null);
+    }
+
+    /**
+     * Analiza un APK con opciones de autenticidad (allowlist/baseline/sellos).
+     * El motor de autenticidad es independiente: si falla, el informe
+     * estático sigue intacto (auth queda null). Nunca lanza.
+     */
+    public static ApkReport analyze(File apk, ReaAuthenticityEngine.Options authOptions) {
+        ApkReport r = analyzeStatic(apk);
+        try {
+            ReaAuthenticityEngine.Options o = new ReaAuthenticityEngine.Options();
+            if (authOptions != null) {
+                o.allowlistJson = authOptions.allowlistJson;
+                o.baselineJson = authOptions.baselineJson;
+                if (authOptions.trustedStamps != null) {
+                    o.trustedStamps.addAll(authOptions.trustedStamps);
+                }
+                o.forceInternal = authOptions.forceInternal;
+                o.manifestXml = authOptions.manifestXml;
+            }
+            if ((o.manifestXml == null || o.manifestXml.isEmpty())
+                    && r.manifestXml != null && !r.manifestXml.isEmpty()) {
+                o.manifestXml = r.manifestXml;
+            }
+            r.auth = ReaAuthenticityEngine.analyze(apk, o);
+        } catch (Throwable ignored) {
+            r.auth = null;
+        }
+        return r;
+    }
+
+    /** Solo el análisis estático clásico, sin autenticidad. Nunca lanza. */
+    public static ApkReport analyzeStatic(File apk) {
         ApkReport r = new ApkReport();
         try {
             if (apk == null || !apk.isFile()) {
@@ -1830,6 +1880,12 @@ public final class ReaEngine {
 
     /** Extrae el árbol del APK + smali + informe a un ZIP. Nunca lanza. */
     public static ExtractResult extractToZip(File apk, File outZip) {
+        return extractToZip(apk, outZip, null);
+    }
+
+    /** Como {@link #extractToZip(File, File)} con opciones de autenticidad. Nunca lanza. */
+    public static ExtractResult extractToZip(File apk, File outZip,
+                                             ReaAuthenticityEngine.Options authOptions) {
         ExtractResult r = new ExtractResult();
         try {
             if (apk == null || !apk.isFile()) {
@@ -2117,7 +2173,7 @@ public final class ReaEngine {
                     } catch (Throwable t) {
                         r.notes.add("java: no disponible");
                     }
-                    ApkReport rep = analyze(apk);
+                    ApkReport rep = analyze(apk, authOptions);
                     putTextTracked(zos, "rea/INFORME.txt", rep.toText(), total, r, false);
                     putTextTracked(zos, "rea/NATIVO_simbolos.txt", nativeSymbolsText(rep), total, r, false);
                     r.notes.add("nativo: " + rep.alfaElfs.size() + " ELF con símbolos");
@@ -2126,6 +2182,14 @@ public final class ReaEngine {
                         r.notes.add("paquete: rea/paquete.json incluido");
                     } catch (Throwable ignored) {
                         r.notes.add("paquete: no se pudo emitir el JSON");
+                    }
+                    try {
+                        String aj = rep.auth == null ? "{}" : rep.auth.toJson();
+                        if (putTextTracked(zos, "rea/autenticidad.json", aj, total, r, false)) {
+                            r.notes.add("autenticidad: rea/autenticidad.json incluido");
+                        }
+                    } catch (Throwable ignored) {
+                        r.notes.add("autenticidad: no se pudo emitir el JSON");
                     }
                     StringBuilder xs = new StringBuilder();
                     xs.append("paquete=").append(r.packageName).append('\n');

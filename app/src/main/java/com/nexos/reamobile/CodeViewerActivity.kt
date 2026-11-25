@@ -461,7 +461,7 @@ class CodeViewerActivity : Activity() {
                 // PHANTOM: prioridad dirigida (entradas+pantallas+grupos); si falla,
                 // lista vacía = orden de carga de siempre.
                 val prio: List<String> = try {
-                    val rep = ReaEngine.analyze(apk)
+                    val rep = ReaEngine.analyzeStatic(apk)
                     PhantomDecompile.priority(rep,
                         JadxAdapter.recommendedCap(heap))
                 } catch (t: Throwable) {

@@ -3,7 +3,21 @@
 Análisis estático de APK 100% on-device, inspirado en
 [REA (Reverse Engineer Anything)](https://github.com/morluto/rea) (MIT) y su fork
 solo-Android [REA-ReverseEngineerAndroid](https://github.com/Hubupup/REA-ReverseEngineerAndroid).
-Código del motor escrito desde cero en Java/Kotlin; sin dependencias externas.
+Código del motor escrito desde cero en Java/Kotlin; dependencias: JADX
+(descompilar) + apksig oficial (verificar firmas).
+
+## Novedades v0.5
+
+- REA APK Authenticity Engine (`engine/auth`, independiente de OMEGA/ALFA/
+  PHANTOM): verificación criptográfica v1/v2/v3/v3.1 con apksig 8.7.3 +
+  respaldo interno (digest AOSP + firma JCA), identidad de firmante con
+  allowlist versionada, Source Stamp, linaje de rotación, baseline oficial
+  importable, indicadores de repack y veredicto OFFICIAL/NOT_OFFICIAL/
+  SUSPICIOUS/UNKNOWN con confianza por calidad de evidencia.
+- Informe: nueva sección `AUTENTICIDAD Y PROCEDENCIA` (amplía FIRMA),
+  `authenticity` en `paquete.json`, `rea/autenticidad.json` en el ZIP y
+  botón Autenticidad con evidencia por indicador. Lo no comprobado es
+  UNKNOWN, nunca acusación: 45 pruebas nuevas, 311 en total en verde.
 
 ## Novedades v0.4
 

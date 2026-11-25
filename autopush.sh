@@ -123,6 +123,33 @@ git add settings.gradle build.gradle gradle.properties .gitignore \
   app/src/test/java/com/nexos/reamobile/engine/PhantomNamesTest.java \
   app/src/test/java/com/nexos/reamobile/engine/PhantomAttribTest.java \
   docs/PHANTOM.md \
+  app/src/main/java/com/nexos/reamobile/engine/auth/AuthTri.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/AuthJson.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/AuthEvidence.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/AuthCert.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/ApkSigAdapter.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/AuthSignature.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/AuthAllowlist.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/AuthProvenance.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/AuthRotation.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/AuthBaseline.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/AuthManifest.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/AuthRepack.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/AuthVerdict.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/AuthResult.java \
+  app/src/main/java/com/nexos/reamobile/engine/auth/ReaAuthenticityEngine.java \
+  app/src/test/java/com/nexos/reamobile/engine/auth/AuthFixture.java \
+  app/src/test/java/com/nexos/reamobile/engine/auth/AuthSignatureTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/auth/AuthIdentityTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/auth/AuthRotationTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/auth/AuthProvenanceTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/auth/AuthBaselineTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/auth/AuthRepackVerdictTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/auth/AuthEngineTest.java \
+  app/src/main/assets/rea_allowlist.json \
+  app/src/main/assets/rea_baseline.json \
+  app/src/main/assets/rea_trusted_stamps.json \
+  docs/AUTENTICIDAD.md \
   autopush.sh \
   app/src/main/java/com/nexos/reamobile/Session.kt \
   app/src/test/java/com/nexos/reamobile/SessionCacheTest.kt \

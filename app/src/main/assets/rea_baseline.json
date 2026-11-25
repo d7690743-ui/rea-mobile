@@ -1,0 +1,8 @@
+{
+  "schema": "rea-baseline-v1",
+  "id": "rea-bundled",
+  "version": "none",
+  "source": "bundled-empty: sin referencias oficiales. Importa baselines verificados para comparar bytes; sin ellos el motor responde UNKNOWN, nunca acusa.",
+  "updated": "",
+  "entries": []
+}

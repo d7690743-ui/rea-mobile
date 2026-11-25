@@ -19,6 +19,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.nexos.reamobile.engine.ReaEngine
+import com.nexos.reamobile.engine.auth.AuthJson
+import com.nexos.reamobile.engine.auth.ReaAuthenticityEngine
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -34,9 +36,11 @@ class MainActivity : Activity() {
     private lateinit var btnExtract: Button
     private lateinit var btnShareZip: Button
     private lateinit var btnView: Button
+    private lateinit var btnAuth: Button
     private lateinit var progress: ProgressBar
     private var lastReport: String = ""
     private var lastApk: File? = null
+    private var lastAuthOptions: ReaAuthenticityEngine.Options? = null
     private var disclaimer: AlertDialog? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -67,6 +71,10 @@ class MainActivity : Activity() {
             text = "Ver código"
             isEnabled = false
         }
+        btnAuth = Button(this).apply {
+            text = "Autenticidad"
+            isEnabled = false
+        }
         progress = ProgressBar(this).apply { visibility = View.GONE }
         val scroll = ScrollView(this)
         txt = TextView(this).apply {
@@ -84,6 +92,7 @@ class MainActivity : Activity() {
         root.addView(btnExtract)
         root.addView(btnShareZip)
         root.addView(btnView)
+        root.addView(btnAuth)
         root.addView(progress)
         root.addView(
             scroll,
@@ -96,6 +105,7 @@ class MainActivity : Activity() {
         btnExtract.setOnClickListener { extractZip() }
         btnShareZip.setOnClickListener { shareZip() }
         btnView.setOnClickListener { openViewer() }
+        btnAuth.setOnClickListener { showAuthDialog() }
         showDisclaimerOnce()
         restoreState(savedInstanceState)
     }
@@ -133,6 +143,7 @@ class MainActivity : Activity() {
             btnShare.isEnabled = true
             btnExtract.isEnabled = true
             btnView.isEnabled = true
+            btnAuth.isEnabled = Session.auth != null
         } catch (t: Throwable) {
         }
     }
@@ -196,6 +207,7 @@ class MainActivity : Activity() {
         btnExtract.isEnabled = false
         btnShareZip.isEnabled = false
         btnView.isEnabled = false
+        btnAuth.isEnabled = false
         progress.visibility = View.VISIBLE
         txt.text = "Analizando…"
         Thread {
@@ -215,7 +227,8 @@ class MainActivity : Activity() {
                     }
                     throw IllegalStateException("APK mayor de 512 MB o ilegible")
                 }
-                val report = ReaEngine.analyze(tmp)
+                val authOpts = loadAuthOptions()
+                val report = ReaEngine.analyze(tmp, authOpts)
                 val pmSection = packageManagerSection(tmp.absolutePath)
                 lastReport = report.toText() + "\n" + pmSection
                 try {
@@ -229,10 +242,13 @@ class MainActivity : Activity() {
                     Session.appClasses = report.appClasses
                     Session.appClassTotal = report.appClassTotal
                     Session.resetCache()
+                    Session.auth = report.auth
+                    lastAuthOptions = authOpts
                     txt.text = Session.capForView(lastReport)
                     btnShare.isEnabled = true
                     btnExtract.isEnabled = true
                     btnView.isEnabled = true
+                    btnAuth.isEnabled = report.auth != null
                     progress.visibility = View.GONE
                 }
             } catch (t: OutOfMemoryError) {
@@ -259,13 +275,14 @@ class MainActivity : Activity() {
         btnShare.isEnabled = false
         btnExtract.isEnabled = false
         btnShareZip.isEnabled = false
+        btnAuth.isEnabled = false
         progress.visibility = View.VISIBLE
         txt.text = "Extrayendo…"
         Thread {
             try {
                 val tmpZip = File(cacheDir, "rea_extraccion_" + System.currentTimeMillis() + ".zip")
                 cleanStaleTemps(tmpZip)
-                val res = ReaEngine.extractToZip(apk, tmpZip)
+                val res = ReaEngine.extractToZip(apk, tmpZip, lastAuthOptions)
                 if (res.error != null) {
                     try {
                         tmpZip.delete()
@@ -300,6 +317,7 @@ class MainActivity : Activity() {
                     btnShare.isEnabled = lastReport.isNotEmpty()
                     btnExtract.isEnabled = lastApk != null
                     btnView.isEnabled = lastApk != null
+                    btnAuth.isEnabled = Session.auth != null
                 }
             }
         }.start()
@@ -407,6 +425,257 @@ class MainActivity : Activity() {
     private fun openViewer() {
         if (Session.analyzing || Session.extracting || lastApk == null) return
         startActivity(Intent(this, CodeViewerActivity::class.java))
+    }
+
+    /** Carga allowlist/baseline/sellos bundled (best-effort, acotado). */
+    private fun loadAuthOptions(): ReaAuthenticityEngine.Options {
+        val o = ReaAuthenticityEngine.Options()
+        try {
+            o.allowlistJson = readAssetCapped("rea_allowlist.json")
+            o.baselineJson = readAssetCapped("rea_baseline.json")
+            val stamps = readAssetCapped("rea_trusted_stamps.json")
+            if (!stamps.isNullOrEmpty()) {
+                val p = AuthJson.parse(stamps)
+                if (p.error == null) {
+                    val obj = AuthJson.asObject(p.root)
+                    if (obj != null) {
+                        for (s in AuthJson.strList(obj, "sha256")) {
+                            if (s.isNotEmpty()) o.trustedStamps.add(s)
+                        }
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+        }
+        return o
+    }
+
+    private fun readAssetCapped(name: String): String? {
+        return try {
+            assets.open(name).use { ins ->
+                val buf = ByteArray(2 * 1024 * 1024)
+                val sb = StringBuilder()
+                while (true) {
+                    val n = ins.read(buf)
+                    if (n <= 0) break
+                    sb.append(String(buf, 0, n, Charsets.UTF_8))
+                    if (sb.length > 2 * 1024 * 1024) break
+                }
+                sb.toString()
+            }
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /** Diálogo de autenticidad: 6 indicadores en texto + veredicto. */
+    private fun showAuthDialog() {
+        val auth = Session.auth
+        if (auth == null) {
+            Toast.makeText(this, "Sin resultado de autenticidad", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            val v = auth.verdict
+            val items = arrayOf(
+                "Veredicto: ${verdictText(v.overall)} (confianza ${v.confidence})",
+                "Firma: ${triText(v.apkSignatureValid, "válida", "inválida", "no comprobada")}",
+                "Firmante: ${signerText()}",
+                "Procedencia: ${triText(v.playProvenance, "confirmada", "no atribuida", "desconocida")}",
+                "Versión oficial: ${baselineText()}",
+                "Modificaciones: ${modText()}",
+                "Rotación: ${rotationText()}"
+            )
+            AlertDialog.Builder(this)
+                .setTitle("Autenticidad y procedencia")
+                .setItems(items) { _, which -> showAuthDetail(which) }
+                .setPositiveButton("Cerrar", null)
+                .show()
+        } catch (t: Throwable) {
+            Toast.makeText(this, "No se pudo mostrar: ${t.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun verdictText(overall: String): String {
+        return when (overall) {
+            "OFFICIAL" -> "oficial"
+            "NOT_OFFICIAL" -> "no oficial"
+            "SUSPICIOUS" -> "sospechoso"
+            else -> "desconocido (sin datos suficientes)"
+        }
+    }
+
+    private fun triText(t: com.nexos.reamobile.engine.auth.AuthTri, yes: String, no: String, unk: String): String {
+        return try {
+            when (t) {
+                com.nexos.reamobile.engine.auth.AuthTri.TRUE -> yes
+                com.nexos.reamobile.engine.auth.AuthTri.FALSE -> no
+                else -> unk
+            }
+        } catch (e: Throwable) {
+            unk
+        }
+    }
+
+    private fun signerText(): String {
+        val auth = Session.auth ?: return "desconocido"
+        return when (auth.signature.allowMatch) {
+            "MATCH" -> "reconocido (oficial)"
+            "MISMATCH" -> "distinto al oficial"
+            "ERROR" -> "no comprobado (error de allowlist)"
+            else -> "desconocido (sin referencias)"
+        }
+    }
+
+    private fun baselineText(): String {
+        val auth = Session.auth ?: return "desconocida"
+        return when (auth.verdict.officialBaselineMatch) {
+            com.nexos.reamobile.engine.auth.AuthTri.TRUE -> "coincide con la oficial"
+            com.nexos.reamobile.engine.auth.AuthTri.FALSE -> "distinta a la oficial"
+            else -> "sin referencia (no valorable)"
+        }
+    }
+
+    private fun modText(): String {
+        val auth = Session.auth ?: return "no valorables"
+        return when (auth.verdict.modificationIndicators) {
+            com.nexos.reamobile.engine.auth.AuthTri.TRUE -> "detectadas (ver evidencia)"
+            com.nexos.reamobile.engine.auth.AuthTri.FALSE -> "no detectadas"
+            else -> "no valorables"
+        }
+    }
+
+    private fun rotationText(): String {
+        val auth = Session.auth ?: return "desconocida"
+        val r = auth.rotation
+        if (r.lineagePresent != com.nexos.reamobile.engine.auth.AuthTri.TRUE) return "sin linaje"
+        return when (r.lineageMatchesOfficial) {
+            com.nexos.reamobile.engine.auth.AuthTri.TRUE -> "linaje oficial (${r.certificates.size} niveles)"
+            com.nexos.reamobile.engine.auth.AuthTri.FALSE -> "linaje no oficial"
+            else -> "linaje no comprobado"
+        }
+    }
+
+    /** Detalle técnico de un indicador con su evidencia. */
+    private fun showAuthDetail(which: Int) {
+        val auth = Session.auth ?: return
+        try {
+            val sb = StringBuilder()
+            when (which) {
+                0 -> {
+                    sb.append("Veredicto: ${verdictText(auth.verdict.overall)}\n")
+                    sb.append("Confianza: ${auth.verdict.confidence}\n\nMotivos:\n")
+                    for (s in auth.verdict.reasons) sb.append("- ").append(s).append('\n')
+                    if (auth.verdict.warnings.isNotEmpty()) {
+                        sb.append("\nAvisos:\n")
+                        for (s in auth.verdict.warnings) sb.append("- ").append(s).append('\n')
+                    }
+                    if (auth.verdict.unknowns.isNotEmpty()) {
+                        sb.append("\nSin comprobar:\n")
+                        for (s in auth.verdict.unknowns) sb.append("- ").append(s).append('\n')
+                    }
+                }
+                1 -> {
+                    sb.append("v1: ${auth.signature.v1.detail}\n")
+                    sb.append("v2: ${auth.signature.v2.detail}\n")
+                    sb.append("v3: ${auth.signature.v3.detail}\n")
+                    sb.append("v3.1: ${auth.signature.v31.detail}\n")
+                    sb.append("integridad: ${auth.signature.integrityOk}\n")
+                    sb.append("método: ${auth.signature.method}\n")
+                    appendEvidence(sb, auth, "signature")
+                }
+                2 -> {
+                    for (c in auth.signature.signerCerts) {
+                        sb.append("sha256: ${c.sha256}\n")
+                        sb.append("sujeto: ${c.subjectDn}\n")
+                        sb.append("emisor: ${c.issuerDn}\n")
+                        sb.append("serie: ${c.serial}\n")
+                        sb.append("válido: ${c.notBefore} .. ${c.notAfter}\n")
+                        sb.append("algoritmo: ${c.sigAlg}\n\n")
+                    }
+                    sb.append("allowlist: ${auth.signature.allowMatch}")
+                    if (auth.signature.allowVersion.isNotEmpty()) {
+                        sb.append(" (v${auth.signature.allowVersion}, ${auth.signature.allowSource})")
+                    }
+                    sb.append('\n')
+                    appendEvidence(sb, auth, "signer")
+                }
+                3 -> {
+                    sb.append("sello presente: ${auth.provenance.stampPresent}\n")
+                    sb.append("sello verificado: ${auth.provenance.stampVerified}\n")
+                    sb.append("cert sello: ${auth.provenance.stampCertSha256}\n")
+                    sb.append("identidad confiable: ${auth.provenance.stampMatchesTrusted}\n")
+                    sb.append("distribuido por Play: ${auth.provenance.distributedByPlay}\n")
+                    sb.append(auth.provenance.detail).append('\n')
+                    appendEvidence(sb, auth, "provenance")
+                }
+                4 -> {
+                    sb.append("paquete: ${auth.baseline.packageMatch}\n")
+                    sb.append("versión oficial: ${auth.baseline.versionKnownOfficial}\n")
+                    sb.append("apk: ${auth.baseline.apkSha256Match}\n")
+                    sb.append("dex: ${auth.baseline.dexHashesMatch}\n")
+                    sb.append("permisos: +${auth.baseline.permissionsDiff.added.size} -${auth.baseline.permissionsDiff.removed.size}\n")
+                    sb.append("exportados: +${auth.baseline.exportedComponentsDiff.added.size} -${auth.baseline.exportedComponentsDiff.removed.size}\n")
+                    sb.append("nativas: ${auth.baseline.nativeLibsDiff.match}\n")
+                    sb.append("splits: ${auth.baseline.splitsMatch}\n")
+                    sb.append("variante: ${auth.baseline.variantMatch}\n")
+                    sb.append(auth.baseline.detail).append('\n')
+                    appendEvidence(sb, auth, "baseline")
+                }
+                5 -> {
+                    sb.append("debuggable: ${auth.repack.debuggable}\n")
+                    sb.append("testOnly: ${auth.repack.testOnly}\n")
+                    sb.append("allowBackup anómalo: ${auth.repack.allowBackupAnomaly}\n")
+                    sb.append("cleartext: ${auth.repack.cleartextTraffic}\n")
+                    sb.append("v1 inesperado: ${auth.repack.v1Unexpected}\n")
+                    sb.append("splits ausentes: ${auth.repack.splitsMissing}\n")
+                    sb.append("manifest modificado: ${auth.repack.manifestModified}\n")
+                    sb.append("dex modificado: ${auth.repack.dexModified}\n")
+                    sb.append("nativas modificadas: ${auth.repack.nativeLibsModified}\n")
+                    sb.append(auth.repack.detail).append('\n')
+                    appendEvidence(sb, auth, "repack")
+                }
+                else -> {
+                    sb.append("linaje presente: ${auth.rotation.lineagePresent}\n")
+                    sb.append("linaje válido: ${auth.rotation.lineageValid}\n")
+                    sb.append("clave observada: ${auth.rotation.observedKey}\n")
+                    sb.append("coincide con oficial: ${auth.rotation.lineageMatchesOfficial}\n")
+                    if (auth.rotation.sdkNote.isNotEmpty()) sb.append("sdk: ${auth.rotation.sdkNote}\n")
+                    if (auth.rotation.capsNote.isNotEmpty()) sb.append("caps: ${auth.rotation.capsNote}\n")
+                    var i = 0
+                    for (c in auth.rotation.certificates) {
+                        sb.append("nivel $i: ${c.shortPrint} ${c.subjectDn}\n")
+                        i++
+                    }
+                    sb.append(auth.rotation.detail).append('\n')
+                    appendEvidence(sb, auth, "rotation")
+                }
+            }
+            var text = sb.toString()
+            if (text.length > 8000) text = text.substring(0, 8000) + "\n[…recortado…]"
+            AlertDialog.Builder(this)
+                .setTitle("Evidencia técnica")
+                .setMessage(text)
+                .setPositiveButton("Cerrar", null)
+                .show()
+        } catch (t: Throwable) {
+            Toast.makeText(this, "No se pudo mostrar: ${t.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun appendEvidence(sb: StringBuilder, auth: com.nexos.reamobile.engine.auth.AuthResult.Report, category: String) {
+        try {
+            sb.append("\nEvidencia:\n")
+            var n = 0
+            for (e in auth.evidence) {
+                if (e.category == category && n < 20) {
+                    sb.append("- ").append(e.toText()).append('\n')
+                    n++
+                }
+            }
+            if (n == 0) sb.append("(sin evidencia de esta categoría)\n")
+        } catch (t: Throwable) {
+        }
     }
 
     /** Borra temporales viejos de análisis/extracciones anteriores (best-effort). */

@@ -79,6 +79,8 @@ object Session {
     /** Informe completo cacheado (H8): se reutiliza si el APK no cambió. */
     var lastFullReport: String? = null
     var lastFullReportKey: String = ""
+    /** Resultado de autenticidad del último análisis (pantalla Autenticidad). */
+    var auth: com.nexos.reamobile.engine.auth.AuthResult.Report? = null
 
     /** Tope de caracteres por vista de texto (H5): el dato completo sigue en caché. */
     const val MAX_VIEW_CHARS = 500000

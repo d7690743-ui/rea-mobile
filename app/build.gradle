@@ -11,8 +11,8 @@ android {
         applicationId 'com.nexos.reamobile'
         minSdk 24
         targetSdk 35
-        versionCode 13
-        versionName '0.4.3'
+        versionCode 14
+        versionName '0.5.0'
     }
 
     signingConfigs {
@@ -45,11 +45,15 @@ android {
     }
 }
 
-// Cero dependencias en la app: 100% framework + motor REA en Java puro.
-// Solo JUnit para el test unitario puro (SmaliExtractTest).
+// Motor REA en Java puro + framework; dependencias justificadas abajo.
 // JADX (Apache 2.0, ver README): solo core + entrada dex, sin GUI ni CLI.
+// apksig (Apache 2.0, Google, misma versión que el AGP): verificación
+// criptográfica oficial v1/v2/v3/v3.1 + Source Stamp + linaje de rotación
+// para el REA APK Authenticity Engine (con respaldo interno si falta).
+// Solo JUnit para los tests unitarios puros.
 dependencies {
     implementation 'io.github.skylot:jadx-core:1.5.2'
     implementation 'io.github.skylot:jadx-dex-input:1.5.2'
+    implementation 'com.android.tools.build:apksig:8.7.3'
     testImplementation 'junit:junit:4.13.2'
 }
