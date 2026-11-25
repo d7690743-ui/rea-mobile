@@ -127,6 +127,8 @@ public final class ReaEngine {
         public String sigScheme = "";
         public String sigCertSha256 = "";
         public String sigCertSubject = "";
+        /** true solo si el digest v2/v3 se verificó contra el contenido (S1-real). */
+        public boolean sigVerified = false;
         public long libAppSize;
         public int libAppStrings;
         public List<String> libAppUrls = new ArrayList<>();
@@ -234,6 +236,7 @@ public final class ReaEngine {
             if (!sigScheme.isEmpty()) sb.append("esquema=").append(sigScheme).append('\n');
             if (!sigCertSha256.isEmpty()) sb.append("certSHA256=").append(sigCertSha256).append('\n');
             if (!sigCertSubject.isEmpty()) sb.append("certSujeto=").append(sigCertSubject).append('\n');
+            sb.append("verificada=").append(sigVerified ? "sí" : "no (presencia; validez NO comprobada)").append('\n');
             sb.append("\n=== MANIFEST (").append(manifestNote).append(") ===\n");
             sb.append("permisos(").append(manifestPerms.size()).append(")\n");
             for (String p : manifestPerms) sb.append("  - ").append(p).append('\n');
@@ -567,7 +570,7 @@ public final class ReaEngine {
                 appendRecLine(sb, "layouts", alfaScreens.size(), recLayoutTotal);
                 appendRecLine(sb, "nativas", alfaElfs.size(), recSoTotal);
                 sb.append("  manifest=").append(manifestXml.isEmpty() ? "no" : "sí")
-                        .append(" firma=")
+                        .append(" firmaPresente=")
                         .append((!sigScheme.isEmpty() || !certSubjects.isEmpty() || apkSigBlock)
                                 ? "sí" : "no").append('\n');
             }
@@ -636,6 +639,7 @@ public final class ReaEngine {
             jsonField(sb, "sigScheme", sigScheme, false);
             jsonField(sb, "sigCertSha256", sigCertSha256, false);
             jsonField(sb, "sigCertSubject", sigCertSubject, false);
+            sb.append(",\"sigVerificada\":").append(sigVerified);
             sb.append(",\"libAppSize\":").append(libAppSize);
             sb.append(",\"libAppStrings\":").append(libAppStrings);
             jsonStrList(sb, "libAppUrls", libAppUrls);
@@ -1515,7 +1519,7 @@ public final class ReaEngine {
             if (!r.manifestIntrusive.isEmpty()) {
                 sb.append(" | ").append(r.manifestIntrusive.size()).append(" intrusivo(s)");
             }
-            if (!r.sigScheme.isEmpty()) sb.append(" | firma ").append(r.sigScheme);
+            if (!r.sigScheme.isEmpty()) sb.append(" | firma-presente ").append(r.sigScheme);
             if (!r.trackers.isEmpty()) sb.append(" | ").append(r.trackers.size()).append(" tracker(s)");
             if (!r.packers.isEmpty()) sb.append(" | protector");
             if (r.libAppSize > 0) sb.append(" | libapp ").append(r.libAppSize / 1024).append(" KB");
@@ -2216,7 +2220,7 @@ public final class ReaEngine {
                         + r.totalStrings + " strings.",
                 "sha256=" + r.sha256);
         if (!r.certSubjects.isEmpty()) {
-            r.finding("firma", r.certSubjects.size() + " certificado(s) en META-INF",
+            r.finding("firma", r.certSubjects.size() + " certificado(s) en META-INF (NO verificados)",
                     r.certSubjects.get(0), "archivos=" + r.certFiles);
         } else if (!r.apkSigBlock) {
             r.finding("firma", "Sin firma detectable",
@@ -2229,7 +2233,7 @@ public final class ReaEngine {
                 det = "Esquema " + r.sigScheme
                         + (r.sigCertSubject.isEmpty() ? "" : "; " + r.sigCertSubject);
             }
-            r.finding("firma", "Bloque de firma APK v2/v3+ presente",
+            r.finding("firma", "Bloque de firma APK v2/v3+ presente (validez NO verificada)",
                     det, "magia \"APK Sig Block 42\""
                             + (r.sigCertSha256.isEmpty() ? "" : "; sha256=" + r.sigCertSha256));
         }

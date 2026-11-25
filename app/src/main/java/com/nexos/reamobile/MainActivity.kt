@@ -332,12 +332,19 @@ class MainActivity : Activity() {
 
     private fun shareReport() {
         if (lastReport.isEmpty()) return
-        val i = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "Informe REA Mobile")
-            putExtra(Intent.EXTRA_TEXT, lastReport)
+        try {
+            // Vía fichero: EXTRA_TEXT con MB tumba el Binder (TransactionTooLarge).
+            File(cacheDir, ZipShareProvider.REPORT_NAME).writeText(lastReport)
+            val i = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "Informe REA Mobile")
+                putExtra(Intent.EXTRA_STREAM, ZipShareProvider.reportUri())
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(i, "Compartir informe"))
+        } catch (t: Throwable) {
+            Toast.makeText(this, "No se pudo compartir: ${t.message}", Toast.LENGTH_SHORT).show()
         }
-        startActivity(Intent.createChooser(i, "Compartir informe"))
     }
 
     private fun shareZip() {

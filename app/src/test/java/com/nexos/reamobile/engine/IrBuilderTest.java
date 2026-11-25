@@ -85,6 +85,28 @@ public class IrBuilderTest {
         assertTrue(vacio.blocks.isEmpty());
     }
 
+    @Test
+    public void invoke35cNibblesAG() {
+        // T1: 35c es A|G|op — A=conteo (bits 12-15), G=5º reg (bits 8-11).
+        // A=2, G=0, u2=C|D|E|F con C=0,D=1,E=3,F=4 → regs=[0,1].
+        int u0 = (2 << 12) | (0 << 8) | 0x6E;
+        int u2 = (4 << 12) | (3 << 8) | (1 << 4) | 0;
+        IrBuilder.MethodIr r = IrBuilder.build(new int[]{u0, 7, u2}, 3, 8);
+        assertNull(r.error);
+        assertEquals(1, r.insns.size());
+        assertTrue(Arrays.equals(new int[]{0, 1}, r.insns.get(0).regs));
+        // G distinto de 0 con A=5: el 5º es G, no A.
+        int u0b = (5 << 12) | (7 << 8) | 0x6E;
+        IrBuilder.MethodIr r2 = IrBuilder.build(new int[]{u0b, 7, u2}, 3, 8);
+        assertNull(r2.error);
+        assertTrue(Arrays.equals(new int[]{0, 1, 3, 4, 7}, r2.insns.get(0).regs));
+        // 45cc (invoke-polymorphic) usa el mismo layout A|G (4 units: +proto).
+        int u0c = (2 << 12) | (0 << 8) | 0xF2;
+        IrBuilder.MethodIr r3 = IrBuilder.build(new int[]{u0c, 7, u2, 0}, 4, 8);
+        assertNull(r3.error);
+        assertTrue(Arrays.equals(new int[]{0, 1}, r3.insns.get(0).regs));
+    }
+
     /** code_off del método directo N (dex sintético: 1 clase). */
     static int codeOff(byte[] dex, int methodIdx) {
         int classDefsOff = u32(dex, 0x64);

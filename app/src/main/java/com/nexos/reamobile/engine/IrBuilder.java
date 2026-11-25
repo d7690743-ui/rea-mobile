@@ -214,9 +214,10 @@ public final class IrBuilder {
             case SmaliDumper.F35c:
             case SmaliDumper.F45cc: {
                 int u2 = units[p + 2];
-                int a = (u0 >> 8) & 15;
+                // 35c/45cc es A|G|op: A (conteo) en bits 12-15, G (5º reg) en bits 8-11.
+                int a = (u0 >> 12) & 15;
                 int[] all = {u2 & 15, (u2 >> 4) & 15, (u2 >> 8) & 15, (u2 >> 12) & 15,
-                        (u0 >> 12) & 15};
+                        (u0 >> 8) & 15};
                 int k = Math.max(0, Math.min(a, 5));
                 in.regs = new int[k];
                 System.arraycopy(all, 0, in.regs, 0, k);

@@ -193,7 +193,9 @@ class CodeViewerActivity : Activity() {
     }
 
     override fun onDestroy() {
-        Session.dexBytes = emptyList()
+        // No vaciar Session.dexBytes: es caché compartida entre instancias;
+        // solo se libera en resetCache() o antes de JADX. Evita recargas y
+        // picos duplicados al rotar.
         super.onDestroy()
     }
 
@@ -408,6 +410,10 @@ class CodeViewerActivity : Activity() {
 
     private fun decompile(apk: File) {
         if (working) return
+        if (Session.jadxRunning) {
+            updateStatus("Ya hay una descompilación en curso…")
+            return
+        }
         val memMsg = systemMemoryGate()
         if (memMsg != null) {
             updateStatus(memMsg)
