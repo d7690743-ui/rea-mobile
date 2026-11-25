@@ -100,6 +100,8 @@ public final class ReaEngine {
         public int manifestProviders;
         public int arscStringCount;
         public boolean arscTruncated;
+        /** P3.3: "0x7f0e021c" → "layout/main_activity" (tope 20000). Nunca null. */
+        public Map<String, String> arscIds = new LinkedHashMap<>();
         public List<String> appClasses = new ArrayList<>();
         public int appClassTotal;
         public boolean apkSigBlock;
@@ -1033,10 +1035,13 @@ public final class ReaEngine {
                                 r.urlOrigin, "arsc");
                     }
                     try {
-                        ArscTable.TableInfo ti = ArscTable.parse(arscBytes, 0);
+                        ArscTable.TableInfo ti = ArscTable.parse(arscBytes, 20000);
                         if (ti.error == null) {
                             r.recArscTypes = ti.typeCount;
                             r.recArscEntries = ti.entryTotal;
+                            if (ti.idToName != null && !ti.idToName.isEmpty()) {
+                                r.arscIds = ti.idToName;
+                            }
                         }
                     } catch (Throwable ignored) {
                     }

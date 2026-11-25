@@ -33,6 +33,12 @@ public final class PhantomUi {
         /** P2.5: clase que declara el setContentView llamado. */
         public String calleeClass = "?";
         public String dex = "?";
+        /** P3.3: nombre ARSC ("layout/main_activity"), "" si no hay mapa. */
+        public String layoutName = "";
+        /** P3.3: id probado vía LayoutInflater.inflate→setContentView(View). */
+        public boolean viaInflate;
+        /** P3.3: usa vistas (inflate/findViewById/addView) sin id probado. */
+        public boolean programmatic;
     }
 
     /** Handler onClick verificado en el grafo. Nunca lanza. */
@@ -58,6 +64,18 @@ public final class PhantomUi {
     public static UiResult resolve(RefGraph graph, Set<String> manifestClasses,
                                    List<AlfaUi.Screen> screens,
                                    Map<String, IrBuilder.MethodIr> flowIrs) {
+        return resolve(graph, manifestClasses, screens, flowIrs, null);
+    }
+
+    /**
+     * Variante P3.3 con mapa ARSC id→nombre (puede ser null). Cadena de
+     * resolución: const en sitio (exacto) → inflate (exacto) → rango R
+     * (aprox). Nunca null ni lanza.
+     */
+    public static UiResult resolve(RefGraph graph, Set<String> manifestClasses,
+                                   List<AlfaUi.Screen> screens,
+                                   Map<String, IrBuilder.MethodIr> flowIrs,
+                                   Map<String, String> arscIds) {
         UiResult r = new UiResult();
         try {
             if (graph == null) return r;
@@ -95,9 +113,18 @@ public final class PhantomUi {
                 }
                 cv.layoutId = layoutArg(graph, en.getKey(), parts, flowIrs);
                 if (cv.layoutId.isEmpty()) {
+                    cv.layoutId = layoutViaInflate(graph, en.getKey(), flowIrs);
+                    cv.viaInflate = !cv.layoutId.isEmpty();
+                }
+                if (cv.layoutId.isEmpty()) {
                     cv.layoutId = layoutApprox(flowIrs == null ? null
                             : flowIrs.get(en.getKey()));
                     cv.layoutApprox = !cv.layoutId.isEmpty();
+                }
+                if (!cv.layoutId.isEmpty()) {
+                    cv.layoutName = arscName(arscIds, cv.layoutId);
+                } else {
+                    cv.programmatic = usesViews(graph, en.getKey());
                 }
                 r.contentViews.add(cv);
                 n++;
@@ -155,6 +182,75 @@ public final class PhantomUi {
     }
 
     /**
+     * Id de layout pasado a LayoutInflater.inflate en el mismo método que
+     * llama a setContentView(View): patrón YTM probado (MusicActivity
+     * infla 0x7f0e021c=layout/main_activity y entrega el View). Exacto
+     * cuando el const alimenta el sitio inflate. "" si no hay. Nunca lanza.
+     */
+    static String layoutViaInflate(RefGraph graph, String caller,
+                                   Map<String, IrBuilder.MethodIr> flowIrs) {
+        try {
+            if (graph == null || caller == null || flowIrs == null) return "";
+            IrBuilder.MethodIr ir = flowIrs.get(caller);
+            if (ir == null) return "";
+            ReachConsts.ConstResult cr = ReachConsts.analyze(ir);
+            if (cr == null || cr.callConsts == null) return "";
+            for (ReachConsts.CallConst cc : cr.callConsts) {
+                if (cc == null || cc.kind != ReachConsts.Kind.LIT) continue;
+                if (cc.lit < 0x7f000000L || cc.lit > 0x7fffffffL) continue;
+                for (String callee : InterProc.calleesAt(graph, caller, cc.addr)) {
+                    if (isInflate(callee)) {
+                        return String.format("0x%08x", cc.lit);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return "";
+    }
+
+    private static boolean isInflate(String callee) {
+        try {
+            return callee != null
+                    && callee.startsWith("Landroid/view/LayoutInflater;")
+                    && callee.endsWith("->inflate");
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Nombre ARSC de un id ("0x7f0e021c" → "layout/main_activity").
+     * "" sin mapa o sin entrada. Nunca lanza.
+     */
+    static String arscName(Map<String, String> arscIds, String layoutId) {
+        try {
+            if (arscIds == null || arscIds.isEmpty() || layoutId == null) return "";
+            String v = arscIds.get(layoutId.toLowerCase());
+            return v == null ? "" : v;
+        } catch (Throwable ignored) {
+            return "";
+        }
+    }
+
+    /**
+     * true si el llamador toca vistas (inflate/findViewById/addView):
+     * pantalla programática probable cuando no hay id. Nunca lanza.
+     */
+    static boolean usesViews(RefGraph graph, String caller) {
+        try {
+            if (graph == null || caller == null) return false;
+            for (String c : graph.calleesOf(caller)) {
+                if (c == null) continue;
+                if (c.endsWith("->inflate") || c.endsWith("->findViewById")
+                        || c.endsWith("->addView")) return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    /**
      * Primer literal en rango R (0x7f000000-0x7fffffff) en la IR: candidato
      * LOW cuando el sitio exacto no se verifica. "" si no hay. Nunca lanza.
      */
@@ -183,10 +279,15 @@ public final class PhantomUi {
                 if (cv == null) continue;
                 StringBuilder sb = new StringBuilder();
                 sb.append(cv.className).append(" setContentView(");
-                if (cv.layoutId.isEmpty()) sb.append('?');
-                else {
+                if (cv.layoutId.isEmpty()) {
+                    sb.append(cv.programmatic ? "programática?" : '?');
+                } else {
                     if (cv.layoutApprox) sb.append('~');
                     sb.append(cv.layoutId);
+                    if (cv.layoutName != null && !cv.layoutName.isEmpty()) {
+                        sb.append('=').append(cv.layoutName);
+                    }
+                    if (cv.viaInflate) sb.append(" [inflate]");
                 }
                 sb.append(')');
                 if (cv.calleeClass != null && !"?".equals(cv.calleeClass)) {

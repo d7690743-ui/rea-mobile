@@ -3,7 +3,9 @@ package com.nexos.reamobile.engine;
 import com.nexos.reamobile.intelligence.IntelFinding;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -32,6 +34,10 @@ public final class Phantom {
         public List<PhantomJni.DynLink> dynJni = new ArrayList<>();
         public List<PhantomGroup.FuncGroup> groups = new ArrayList<>();
         public PhantomTaint.TaintXResult taintX = new PhantomTaint.TaintXResult();
+        /** P3: clase ofuscada → etiqueta (PhantomNames). Nunca null. */
+        public Map<String, String> names = new LinkedHashMap<>();
+        /** P3: líneas semánticas por función. Nunca null. */
+        public List<String> semantics = new ArrayList<>();
         public boolean truncated;
     }
 
@@ -45,7 +51,8 @@ public final class Phantom {
             List<AlfaJni.JniLink> jniLinks = ReaEngine.summarizeAlfaJni(r);
             p.contracts = PhantomNet.contracts(r.urls, r.urlOrigin, r.stringRefs,
                     r.graph, r.manifestPerms, r.callerPerm, r.alfaElfs);
-            p.ui = PhantomUi.resolve(r.graph, r.manifestClasses, r.alfaScreens, r.flowIrs);
+            p.ui = PhantomUi.resolve(r.graph, r.manifestClasses, r.alfaScreens,
+                    r.flowIrs, r.arscIds);
             p.store = PhantomStore.analyze(r.superMap, r.stringRefs, r.graph);
             p.data = PhantomData.analyze(r.graph, r.stringRefs, r.appClasses);
             p.dynJni = PhantomJni.link(r.alfaElfs, r.graph);
@@ -60,7 +67,15 @@ public final class Phantom {
                     r.stringRefs, r.callerPerm, cvs, touchers);
             List<PhantomData.DataHit> dh = p.data == null ? null : p.data.hits;
             List<PhantomStore.StoreHit> sh = p.store == null ? null : p.store.hits;
+            PhantomAttrib.enrich(dh, sh, r.graph);
             PhantomMetric.completeStates(p.groups, dh, sh, jniLinks, p.dynJni, r.graph);
+            try {
+                p.names = PhantomNames.harvest(r.graph, r.stringRefs);
+                p.semantics = PhantomNames.describe(p.groups, p.names, r.stringRefs);
+            } catch (Throwable ignored) {
+                p.names = new LinkedHashMap<>();
+                p.semantics = new ArrayList<>();
+            }
             List<Taint.Flow> base = null;
             try {
                 ReaEngine.FlowSummary fs = r.flow();
@@ -122,14 +137,17 @@ public final class Phantom {
             if (p.ui != null && p.ui.contentViews != null) {
                 for (PhantomUi.ContentView cv : p.ui.contentViews) {
                     if (cv == null || u >= 5) break;
+                    String lid = cv.layoutId.isEmpty() ? "?" : cv.layoutId;
+                    if (!cv.layoutId.isEmpty() && cv.layoutName != null
+                            && !cv.layoutName.isEmpty()) lid += "=" + cv.layoutName;
                     IntelFinding inf = IntelFinding.create("pantalla",
-                            cv.className + " setContentView("
-                                    + (cv.layoutId.isEmpty() ? "?" : cv.layoutId) + ")");
+                            cv.className + " setContentView(" + lid + ")");
                     inf.className = cv.className;
-                    inf.evidence = "llamador en grafo" + (cv.inManifest ? " + manifest" : "");
+                    inf.evidence = "llamador en grafo" + (cv.inManifest ? " + manifest" : "")
+                            + (cv.viaInflate ? " + inflate" : "");
                     inf.confidence = IntelFinding.Confidence.MEDIUM;
                     inf.evidenceType = IntelFinding.EvidenceType.STATIC;
-                    inf.limitations = "id sin traducir a nombre (sin mapa ARSC);"
+                    inf.limitations = "id→nombre vía ARSC cuando el mapa cubre;"
                             + " ejecución no observada";
                     if (r.intel.add(inf)) u++;
                 }
@@ -185,6 +203,11 @@ public final class Phantom {
             out.addAll(PhantomStore.summarize(p.store));
             out.add("-- datos (" + p.data.hits.size() + ") --");
             out.addAll(PhantomData.summarize(p.data));
+            out.add("-- nombres (" + (p.names == null ? 0 : p.names.size()) + ") --");
+            out.addAll(PhantomNames.summarizeNames(p.names));
+            out.add("-- semántica (" + (p.semantics == null ? 0 : p.semantics.size())
+                    + ") --");
+            if (p.semantics != null) out.addAll(p.semantics);
             out.add("-- jni dinámico (" + p.dynJni.size() + ") --");
             for (PhantomJni.DynLink l : p.dynJni) {
                 out.add(PhantomJni.summarize(l));

@@ -108,6 +108,8 @@ git add settings.gradle build.gradle gradle.properties .gitignore \
   app/src/main/java/com/nexos/reamobile/engine/PhantomJni.java \
   app/src/main/java/com/nexos/reamobile/engine/PhantomTaint.java \
   app/src/main/java/com/nexos/reamobile/engine/PhantomDecompile.java \
+  app/src/main/java/com/nexos/reamobile/engine/PhantomNames.java \
+  app/src/main/java/com/nexos/reamobile/engine/PhantomAttrib.java \
   app/src/test/java/com/nexos/reamobile/engine/PhantomJniTest.java \
   app/src/test/java/com/nexos/reamobile/engine/PhantomNetTest.java \
   app/src/test/java/com/nexos/reamobile/engine/PhantomUiTest.java \
@@ -117,6 +119,8 @@ git add settings.gradle build.gradle gradle.properties .gitignore \
   app/src/test/java/com/nexos/reamobile/engine/PhantomMetricTest.java \
   app/src/test/java/com/nexos/reamobile/engine/PhantomTaintTest.java \
   app/src/test/java/com/nexos/reamobile/engine/PhantomPackTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/PhantomNamesTest.java \
+  app/src/test/java/com/nexos/reamobile/engine/PhantomAttribTest.java \
   docs/PHANTOM.md \
   autopush.sh \
   app/src/main/java/com/nexos/reamobile/Session.kt \

@@ -113,3 +113,29 @@ Medición YTM 81 MB: analyze 13,4 s, render 0,4 s, pico 140 MB
 (TubeMusic): almacenamiento 2→25 OK. YTM sigue ≤3/8 por causas
 estructurales (código ofuscado = prefijo lib, invisible al grafo;
 tráfico por Cronet nativo; pantallas vía delegate ofuscado).
+
+## P3 (atribución + semántica, verificado contra smali YTM)
+
+Del descompilado apktool de YTM (37.365 smali) salieron 8 adaptaciones:
+
+- P3.1 datos→función (`PhantomAttrib`): cada proto-model/parcelable
+  se amarra a sus referenciadores vía aristas inversas ("referenciado
+  por"); solo añade evidencia, Metric levanta estados sin cambios.
+- P3.2 almacén huérfano (`PhantomAttrib`): helpers por clase-llamada,
+  SQL un salto (loader → llamador propio, "llamado por").
+- P3.3 pantallas (`PhantomUi`): cadena const-en-sitio → inflate →
+  rango. `layoutViaInflate` prueba el patrón real YTM
+  (`MusicActivity` infla 0x7f0e021c=layout/main_activity y entrega el
+  View a `qb.setContentView(View)`); ARSC retenido (tope 20000)
+  traduce id→nombre; sin id pero con vistas se declara
+  "programática?" en vez de "?".
+- Nombres (`PhantomNames.harvest`): etiquetas para clases ofuscadas
+  desde const-strings Kotlin (.kt/.java y rutas). Sección
+  "-- nombres". `MusicActivity` queda fuera (no ofuscada).
+- Semántica (`PhantomNames.describe`): feature desde el manifest
+  (MusicActivity → "Music") + 1 comportamiento por grupo
+  (format-strings). Sección "-- semántica". No mueve la métrica.
+
+Estimación YTM: 26% → 34–40% campos OK (pantallas +20–32,
+datos +15–25, almacén +5–12); permisos/red/nativas sin cambio
+(fuera del alcance P3).

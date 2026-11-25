@@ -123,4 +123,77 @@ public class PhantomUiTest {
         assertTrue(r.contentViews.isEmpty());
         assertTrue(PhantomUi.summarize(null).isEmpty());
     }
+
+    @Test
+    public void idPorInflateExacto() {
+        String act = "Lcom/x/Main;->onCreate";
+        IrBuilder.MethodIr ir = new IrBuilder.MethodIr();
+        ir.regs = 3;
+        IrBuilder.Insn l = DefUseTest.insn(0, 0x12, 0);
+        l.hasLit = true;
+        l.lit = 0x7f0e021cL;
+        IrBuilder.Insn inv = DefUseTest.insn(2, 0x6E, 0);
+        IrBuilder.Insn ret = DefUseTest.insn(5, 0x0E);
+        ret.isReturn = true;
+        ir.blocks.add(DefUseTest.block(0, new int[]{}, l, inv, ret));
+        DexCalls.Edge e1 = new DexCalls.Edge();
+        e1.caller = act;
+        e1.callee = "Landroid/view/LayoutInflater;->inflate";
+        e1.dex = "classes.dex";
+        e1.pos = 2;
+        DexCalls.Edge e2 = new DexCalls.Edge();
+        e2.caller = act;
+        e2.callee = "Lcom/x/Base;->setContentView";
+        e2.dex = "classes.dex";
+        e2.pos = 99;
+        RefGraph g = RefGraph.from(new ArrayList<DexCalls.Edge>(Arrays.asList(e1, e2)));
+        Map<String, IrBuilder.MethodIr> irs = new LinkedHashMap<>();
+        irs.put(act, ir);
+        assertEquals("0x7f0e021c", PhantomUi.layoutViaInflate(g, act, irs));
+        Map<String, String> arsc = new LinkedHashMap<>();
+        arsc.put("0x7f0e021c", "layout/main_activity");
+        PhantomUi.UiResult r = PhantomUi.resolve(g, new LinkedHashSet<String>(),
+                new ArrayList<AlfaUi.Screen>(), irs, arsc);
+        assertEquals(1, r.contentViews.size());
+        PhantomUi.ContentView cv = r.contentViews.get(0);
+        assertEquals("0x7f0e021c", cv.layoutId);
+        assertTrue(cv.viaInflate);
+        assertTrue(!cv.layoutApprox);
+        assertEquals("layout/main_activity", cv.layoutName);
+        String s = PhantomUi.summarize(r).toString();
+        assertTrue(s, s.contains("0x7f0e021c=layout/main_activity"));
+        assertTrue(s, s.contains("[inflate]"));
+    }
+
+    @Test
+    public void programaticaSinId() {
+        String act = "Lcom/x/Main;->onCreate";
+        DexCalls.Edge e1 = new DexCalls.Edge();
+        e1.caller = act;
+        e1.callee = "Lcom/x/Base;->setContentView";
+        e1.dex = "classes.dex";
+        DexCalls.Edge e2 = new DexCalls.Edge();
+        e2.caller = act;
+        e2.callee = "Landroid/app/Activity;->findViewById";
+        e2.dex = "classes.dex";
+        RefGraph g = RefGraph.from(new ArrayList<DexCalls.Edge>(Arrays.asList(e1, e2)));
+        PhantomUi.UiResult r = PhantomUi.resolve(g, new LinkedHashSet<String>(),
+                new ArrayList<AlfaUi.Screen>(),
+                new LinkedHashMap<String, IrBuilder.MethodIr>());
+        assertEquals(1, r.contentViews.size());
+        assertTrue(r.contentViews.get(0).programmatic);
+        assertTrue(PhantomUi.summarize(r).toString().contains("programática?"));
+        assertEquals("", PhantomUi.layoutViaInflate(null, act, null));
+        assertEquals("", PhantomUi.layoutViaInflate(g, act, null));
+    }
+
+    @Test
+    public void nombreArsc() {
+        Map<String, String> arsc = new LinkedHashMap<>();
+        arsc.put("0x7f0e021c", "layout/main_activity");
+        assertEquals("layout/main_activity", PhantomUi.arscName(arsc, "0x7f0e021c"));
+        assertEquals("", PhantomUi.arscName(arsc, "0x7f0b0001"));
+        assertEquals("", PhantomUi.arscName(null, "0x7f0e021c"));
+        assertEquals("", PhantomUi.arscName(null, null));
+    }
 }
