@@ -1,5 +1,6 @@
 package com.nexos.reamobile.ree;
 
+import android.annotation.SuppressLint;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -73,7 +74,9 @@ public class ReaTermuxReceiver extends BroadcastReceiver {
     }
 
     /** Registra el receptor como no exportado (la respuesta va dirigida a este package). */
+    // La rama else solo corre en API 24-32, donde no existe el overload con flags.
     @SuppressWarnings("deprecation")
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     public static ReaTermuxReceiver register(Context c, String prefix, Listener l) {
         ReaTermuxReceiver r = new ReaTermuxReceiver(prefix, l);
         IntentFilter f = new IntentFilter(ReaTermuxBridge.ACTION_RESULT);
