@@ -42,7 +42,7 @@ public final class ReaEngine {
     private ReaEngine() {
     }
 
-    public static final String VERSION = "0.4";
+    public static final String VERSION = "0.4.2";
     private static final long MAX_DEX_BYTES = 160L * 1024 * 1024;
     private static final int MAX_ELF_LIBS = 30;
     private static final int ELF_HEAD_CAP = 4 * 1024 * 1024;
@@ -1106,7 +1106,8 @@ public final class ReaEngine {
                     r.nativeLibs.add(so + " (" + elfArch(head) + ")"
                             + (tag == null ? "" : " [" + tag + "]"));
                     if (e != null && elfParsed < MAX_ELF_LIBS) {
-                        HeadTail ht = readHeadTail(zip, e, ELF_HEAD_CAP, ELF_TAIL_CAP);
+                        PhantomJni.StreamScan scan = new PhantomJni.StreamScan();
+                        HeadTail ht = readHeadTail(zip, e, ELF_HEAD_CAP, ELF_TAIL_CAP, scan);
                         if (ht == null) {
                             r.dexNotes.add("elf " + so + ": omitido por tamaño");
                         } else {
@@ -1114,8 +1115,7 @@ public final class ReaEngine {
                                     ht.tailStart, ht.fileSize);
                             if (ei.error == null) {
                                 try {
-                                    PhantomJni.SoResult soScan = PhantomJni.scanSo(
-                                            ht.head, ht.tail);
+                                    PhantomJni.SoResult soScan = scan.result();
                                     if (soScan != null) {
                                         if (!soScan.jni.isEmpty()) {
                                             ei.jniDynamic = soScan.jni;
@@ -1712,6 +1712,16 @@ public final class ReaEngine {
      * (tailCap). Null si supera MAX_SO_SCAN o falla. Nunca lanza.
      */
     static HeadTail readHeadTail(ZipFile zip, ZipEntry e, int headCap, int tailCap) {
+        return readHeadTail(zip, e, headCap, tailCap, null);
+    }
+
+    /**
+     * Variante que además alimenta un escáner JNI/URL con TODOS los bytes
+     * leídos (sin coste extra de E/S ni memoria). Null igual que la básica.
+     * Nunca lanza.
+     */
+    static HeadTail readHeadTail(ZipFile zip, ZipEntry e, int headCap, int tailCap,
+                                 PhantomJni.StreamScan scan) {
         try {
             if (zip == null || e == null || headCap <= 0 || tailCap <= 0) return null;
             long size = e.getSize();
@@ -1727,6 +1737,7 @@ public final class ReaEngine {
                 int r;
                 while ((r = in.read(buf)) > 0) {
                     if (total + r > MAX_SO_SCAN) return null;
+                    if (scan != null) scan.feed(buf, 0, r);
                     for (int i = 0; i < r; i++) {
                         byte v = buf[i];
                         if (headLen < headCap) head[headLen++] = v;
@@ -1735,6 +1746,7 @@ public final class ReaEngine {
                     }
                     total += r;
                 }
+                if (scan != null) scan.finish();
                 if (total == 0) return null;
                 HeadTail ht = new HeadTail();
                 ht.fileSize = total;
@@ -1790,9 +1802,12 @@ public final class ReaEngine {
     }
 
     private static final long MAX_COPY_ENTRY = 80L * 1024 * 1024;
-    private static final long MAX_ZIP_TOTAL = 250L * 1024 * 1024;
+    private static final long MAX_ZIP_TOTAL = 600L * 1024 * 1024;
     private static final int MAX_STRING_LINES = 30000;
-    private static final long MAX_SMALI_STREAM = 150L * 1024 * 1024;
+    /** Smali total en streaming (6 dex YTM ≈ 300-400 MB sin comprimir). */
+    private static final long MAX_SMALI_STREAM = 500L * 1024 * 1024;
+    /** Entradas del mapa ID→nombre de resources.arsc en el ZIP. */
+    private static final int MAX_ARSC_IDS = 60000;
 
     /** Extrae el árbol del APK + smali + informe a un ZIP. Nunca lanza. */
     public static ExtractResult extractToZip(File apk, File outZip) {
@@ -1868,7 +1883,7 @@ public final class ReaEngine {
                             arscStrings.addAll(ai.strings);
                         }
                         try {
-                            arscTable = ArscTable.parse(ab, 30000);
+                            arscTable = ArscTable.parse(ab, MAX_ARSC_IDS);
                         } catch (Throwable ignored) {
                             arscTable = null;
                         }
@@ -1878,9 +1893,51 @@ public final class ReaEngine {
                 long total = 0;
                 int layoutTotal = 0;
                 int layoutOk = 0;
+                int resRaw = 0;
+                int libRaw = 0;
+                int assetsRaw = 0;
+                boolean arscRaw = false;
                 try {
                     StringBuilder tree = new StringBuilder();
                     int treeEntries = 0;
+                    Set<String> copied = new LinkedHashSet<>();
+                    // Pasada 0: crudos críticos primero (res/, arsc, assets/,
+                    // lib/, manifest) para que el tope total nunca los deje fuera.
+                    Enumeration<? extends ZipEntry> enRaw = zip.entries();
+                    while (enRaw.hasMoreElements()) {
+                        ZipEntry e = enRaw.nextElement();
+                        if (e.isDirectory()) continue;
+                        String name = e.getName();
+                        if (!isCriticalRaw(name)) continue;
+                        if (e.getSize() > MAX_COPY_ENTRY) {
+                            r.notes.add(name + ": crudo no copiado (>80MB)");
+                            continue;
+                        }
+                        byte[] data = readEntry(zip, e, MAX_COPY_ENTRY);
+                        if (data == null) {
+                            r.notes.add(name + ": crudo no copiado");
+                            continue;
+                        }
+                        if (total + data.length > MAX_ZIP_TOTAL) {
+                            r.notes.add("tope total ZIP alcanzado en crudo " + name);
+                            break;
+                        }
+                        zos.putNextEntry(new ZipEntry("apk/" + normalizeZipEntry(name)));
+                        zos.write(data);
+                        zos.closeEntry();
+                        total += data.length;
+                        r.copiedEntries++;
+                        copied.add(name);
+                        if (name.startsWith("res/")) resRaw++;
+                        else if (name.startsWith("lib/")) libRaw++;
+                        else if (name.startsWith("assets/")) assetsRaw++;
+                        else if ("resources.arsc".equals(name)) arscRaw = true;
+                        if (isLayoutXml(name)) {
+                            layoutTotal++;
+                            if (layoutOk < MAX_LAYOUTS && emitLayout(zos, name, data)) layoutOk++;
+                        }
+                        data = null;
+                    }
                     Enumeration<? extends ZipEntry> en = zip.entries();
                     while (en.hasMoreElements()) {
                         ZipEntry e = en.nextElement();
@@ -1894,6 +1951,7 @@ public final class ReaEngine {
                             r.notes.add("árbol parcial: tope 100000 entradas");
                             treeEntries++;
                         }
+                        if (copied.contains(name)) continue;
                         if (e.getSize() > MAX_COPY_ENTRY) {
                             r.notes.add(name + ": no copiado (>80MB)");
                             continue;
@@ -1914,22 +1972,18 @@ public final class ReaEngine {
                         r.copiedEntries++;
                         if (isLayoutXml(name)) {
                             layoutTotal++;
-                            if (layoutOk < MAX_LAYOUTS && data.length <= MAX_LAYOUT_BYTES) {
-                                try {
-                                    String xml = AxmlDecoder.decode(data);
-                                    if (xml != null && !xml.isEmpty()) {
-                                        putText(zos, "rea/layouts/" + normalizeZipEntry(name), xml);
-                                        layoutOk++;
-                                    }
-                                } catch (Throwable ignored) {
-                                }
-                            }
+                            if (layoutOk < MAX_LAYOUTS && emitLayout(zos, name, data)) layoutOk++;
                         }
+                        data = null;
                     }
                     if (layoutTotal > 0) {
                         r.notes.add("layouts: " + layoutOk + "/" + layoutTotal
                                 + " decodificados");
+                    } else {
+                        r.notes.add("layouts: n/a (esperable en Compose/splits)");
                     }
+                    r.notes.add("crudos: res=" + resRaw + " arsc=" + (arscRaw ? "sí" : "no")
+                            + " assets=" + assetsRaw + " lib=" + libRaw);
                     putText(zos, "rea/manifest.xml", manifestXml.isEmpty() ? "(no decodificado)\n" : manifestXml);
                     putText(zos, "rea/ARBOL.txt", tree.toString());
                     // Pasada 2: volcado TOTAL al ZIP en streaming (sin retener).
@@ -1939,19 +1993,19 @@ public final class ReaEngine {
                         public void accept(String path, String text) {
                             try {
                                 if (smaliBytes[0] + text.length() > MAX_SMALI_STREAM) {
-                                    throw new SmaliDumper.Stop("tope 150MB en ZIP");
+                                    throw new SmaliDumper.Stop("tope 500MB en ZIP");
                                 }
                                 byte[] data = text.getBytes("UTF-8");
                                 zosF.putNextEntry(new ZipEntry("rea/" + normalizeZipEntry(path)));
                                 zosF.write(data);
                                 zosF.closeEntry();
                                 smaliBytes[0] += text.length();
-                                if (bootWant.contains(path)
+                                if (bootWant.contains(shortSmaliPath(path))
                                         && (text.contains("startActivity")
                                         || text.contains("getLaunchIntentForPackage"))) {
                                     r.notes.add("autoarranque: "
-                                            + path.replace('/', '.').replace("smali.", "")
-                                            .replace(".smali", "")
+                                            + shortSmaliPath(path).replace('/', '.')
+                                            .replace("smali.", "").replace(".smali", "")
                                             + " lanza actividad (smali)");
                                 }
                             } catch (SmaliDumper.Stop s) {
@@ -1966,16 +2020,19 @@ public final class ReaEngine {
                         ZipEntry de = zip.getEntry(dn);
                         byte[] db = de == null ? null : readEntry(zip, de, MAX_DEX_BYTES);
                         if (db == null) continue;
-                        full.addDex(db);
+                        full.addDex(db, dn);
                         db = null;
                         if (full.r.truncated) break;
                     }
                     StringBuilder cls = new StringBuilder();
                     for (String s : full.r.classSummaries) cls.append(s).append('\n');
                     putText(zos, "rea/CLASES_PROPIAS.txt", cls.length() == 0 ? "(sin clases)\n" : cls.toString());
+                    putText(zos, "rea/smali_index.json", smaliIndexJson(full.r));
+                    putText(zos, "rea/SMALI_FALLOS.txt", smaliFailuresText(full.r));
                     r.smaliClasses = full.r.dumped;
                     r.notes.add("smali: " + full.r.dumped + "/" + full.r.scanned
-                            + " clases, propias=" + full.r.ownMatched);
+                            + " clases, propias=" + full.r.ownMatched
+                            + ", fallos=" + full.r.failTotal + " (ver smali_index.json)");
                     r.notes.addAll(full.r.notes);
                     full.r.classSummaries.clear();
                     StringBuilder ds = new StringBuilder();
@@ -1995,6 +2052,7 @@ public final class ReaEngine {
                                     .append('\n');
                         }
                         putText(zos, "rea/RECURSOS_ids.txt", tb.toString());
+                        putText(zos, "rea/recursos_ids.json", arscIdsJson(arscTable));
                         r.notes.add("recursos: " + arscTable.idToName.size() + "/"
                                 + arscTable.entryTotal + " ids, tipos="
                                 + arscTable.typeCount);
@@ -2037,6 +2095,8 @@ public final class ReaEngine {
                     }
                     ApkReport rep = analyze(apk);
                     putText(zos, "rea/INFORME.txt", rep.toText());
+                    putText(zos, "rea/NATIVO_simbolos.txt", nativeSymbolsText(rep));
+                    r.notes.add("nativo: " + rep.alfaElfs.size() + " ELF con símbolos");
                     try {
                         putText(zos, "rea/paquete.json", rep.toJson());
                         r.notes.add("paquete: rea/paquete.json incluido");
@@ -2077,9 +2137,212 @@ public final class ReaEngine {
             if (name == null || !name.endsWith(".xml")) return false;
             return name.startsWith("res/layout") || name.startsWith("res/xml")
                     || name.startsWith("res/navigation") || name.startsWith("res/menu")
-                    || name.startsWith("res/drawable/") || name.startsWith("res/values/");
+                    || name.startsWith("res/drawable/") || name.startsWith("res/values/")
+                    || name.startsWith("res/anim") || name.startsWith("res/color");
         } catch (Throwable ignored) {
             return false;
+        }
+    }
+
+    /** true si el crudo es crítico y va en la pasada 0. Nunca lanza. */
+    static boolean isCriticalRaw(String name) {
+        try {
+            if (name == null) return false;
+            return name.startsWith("res/") || name.startsWith("assets/")
+                    || name.startsWith("lib/") || "resources.arsc".equals(name)
+                    || "AndroidManifest.xml".equals(name);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * "smali/classes2/com/x/A.smali" → "smali/com/x/A.smali" (para comparar
+     * con bootWant). Nunca lanza; nunca null.
+     */
+    static String shortSmaliPath(String path) {
+        try {
+            if (path == null) return "";
+            if (!path.startsWith("smali/")) return path;
+            int slash = path.indexOf('/', 6);
+            if (slash < 0) return path;
+            return "smali/" + path.substring(slash + 1);
+        } catch (Throwable ignored) {
+            return path == null ? "" : path;
+        }
+    }
+
+    /** Decodifica un AXML al ZIP (best-effort). true si emitido. Nunca lanza. */
+    private static boolean emitLayout(ZipOutputStream zos, String name, byte[] data) {
+        try {
+            if (zos == null || data == null || data.length > MAX_LAYOUT_BYTES) return false;
+            String xml = AxmlDecoder.decode(data);
+            if (xml == null || xml.isEmpty()) return false;
+            putText(zos, "rea/layouts/" + normalizeZipEntry(name), xml);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /** Índice smali por dex + fallos con motivo (JSON). Nunca lanza. */
+    static String smaliIndexJson(SmaliDumper.DumpResult r) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"dexes\":[");
+            boolean first = true;
+            if (r != null) {
+                for (SmaliDumper.DexStat st : r.dexStats) {
+                    if (st == null) continue;
+                    if (!first) sb.append(',');
+                    first = false;
+                    sb.append("{\"dex\":");
+                    jsonQuote(sb, st.dex);
+                    sb.append(",\"clases\":").append(st.scanned);
+                    sb.append(",\"ok\":").append(st.dumped);
+                    sb.append(",\"fallos\":").append(st.failed);
+                    sb.append(",\"bytes\":").append(st.bytes);
+                    sb.append('}');
+                }
+            }
+            sb.append("],\"totales\":{");
+            int scanned = r == null ? 0 : r.scanned;
+            int dumped = r == null ? 0 : r.dumped;
+            int failed = r == null ? 0 : r.failTotal;
+            long bytes = r == null ? 0 : r.bytes;
+            sb.append("\"clases\":").append(scanned);
+            sb.append(",\"ok\":").append(dumped);
+            sb.append(",\"fallos\":").append(failed);
+            sb.append(",\"bytes\":").append(bytes);
+            sb.append(",\"truncado\":").append(r != null && r.truncated);
+            sb.append("},\"fallos\":[");
+            first = true;
+            if (r != null) {
+                for (String f : r.failures) {
+                    if (f == null) continue;
+                    if (!first) sb.append(',');
+                    first = false;
+                    String[] p = f.split("\\|", 3);
+                    sb.append("{\"dex\":");
+                    jsonQuote(sb, p.length > 0 ? p[0] : "?");
+                    sb.append(",\"clase\":");
+                    jsonQuote(sb, p.length > 1 ? p[1] : "?");
+                    sb.append(",\"motivo\":");
+                    jsonQuote(sb, p.length > 2 ? p[2] : "?");
+                    sb.append('}');
+                }
+            }
+            sb.append("]}");
+            return sb.toString();
+        } catch (Throwable ignored) {
+            return "{\"dexes\":[],\"totales\":{},\"fallos\":[]}";
+        }
+    }
+
+    /** Fallos smali en texto legible. Nunca lanza. */
+    static String smaliFailuresText(SmaliDumper.DumpResult r) {
+        try {
+            if (r == null || r.failTotal == 0) return "(sin fallos)\n";
+            StringBuilder sb = new StringBuilder();
+            sb.append("fallos=").append(r.failTotal).append('\n');
+            for (String f : r.failures) {
+                if (f == null) continue;
+                String[] p = f.split("\\|", 3);
+                sb.append(p.length > 0 ? p[0] : "?").append(' ');
+                sb.append(p.length > 1 ? p[1] : "?").append(" :: ");
+                sb.append(p.length > 2 ? p[2] : "?").append('\n');
+            }
+            if (r.failures.size() < r.failTotal) {
+                sb.append("[...recortado: ").append(r.failTotal - r.failures.size())
+                        .append(" más...]\n");
+            }
+            return sb.toString();
+        } catch (Throwable ignored) {
+            return "(sin fallos)\n";
+        }
+    }
+
+    /** Mapa ID→nombre ARSC en JSON. Nunca lanza. */
+    static String arscIdsJson(ArscTable.TableInfo t) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"paquetes\":").append(t == null ? 0 : t.packageCount);
+            sb.append(",\"tipos\":").append(t == null ? 0 : t.typeCount);
+            sb.append(",\"entradas\":").append(t == null ? 0 : t.entryTotal);
+            sb.append(",\"recortado\":").append(t != null && t.truncated);
+            sb.append(",\"ids\":{");
+            boolean first = true;
+            if (t != null) {
+                for (Map.Entry<String, String> e : t.idToName.entrySet()) {
+                    if (e == null || e.getKey() == null) continue;
+                    if (!first) sb.append(',');
+                    first = false;
+                    jsonQuote(sb, e.getKey());
+                    sb.append(':');
+                    jsonQuote(sb, e.getValue() == null ? "?" : e.getValue());
+                }
+            }
+            sb.append("}}");
+            return sb.toString();
+        } catch (Throwable ignored) {
+            return "{\"paquetes\":0,\"tipos\":0,\"entradas\":0,\"recortado\":false,\"ids\":{}}";
+        }
+    }
+
+    /** Tabla de símbolos nativos por .so (texto). Nunca lanza. */
+    static String nativeSymbolsText(ApkReport rep) {
+        try {
+            if (rep == null || rep.alfaElfs.isEmpty()) return "(sin ELF parseados)\n";
+            StringBuilder sb = new StringBuilder();
+            for (AlfaElf.ElfInfo e : rep.alfaElfs) {
+                if (e == null) continue;
+                sb.append("== ").append(e.name).append(" (").append(e.arch)
+                        .append(' ').append(e.elfType).append(", ").append(e.fileSize)
+                        .append(" B)").append(e.partial ? " [parcial]" : "")
+                        .append(e.stripped ? " [stripped]" : "").append('\n');
+                if (!e.needed.isEmpty()) sb.append("  necesita=").append(e.needed).append('\n');
+                if (e.soname != null && !e.soname.isEmpty()) {
+                    sb.append("  soname=").append(e.soname).append('\n');
+                }
+                sb.append("  imports=").append(e.importCount).append(" exports=")
+                        .append(e.exportCount).append(" jni=").append(e.jniExports.size())
+                        .append(e.hasJniOnLoad ? " [JNI_OnLoad]" : "").append('\n');
+                for (String s : e.imports) sb.append("  imp ").append(s).append('\n');
+                for (String s : e.exports) sb.append("  exp ").append(s).append('\n');
+                for (String s : e.jniExports) sb.append("  jni ").append(s).append('\n');
+                for (String s : e.jniDynamic) sb.append("  dyn ").append(s).append('\n');
+                for (String s : e.soUrls) sb.append("  url ").append(s).append('\n');
+            }
+            return sb.toString();
+        } catch (Throwable ignored) {
+            return "(sin ELF parseados)\n";
+        }
+    }
+
+    /** Cadena entre comillas con escapes JSON (null-seguro). Nunca lanza. */
+    static void jsonQuote(StringBuilder sb, String s) {
+        try {
+            if (sb == null) return;
+            if (s == null) {
+                sb.append("\"?\"");
+                return;
+            }
+            sb.append('"');
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                switch (c) {
+                    case '"': sb.append("\\\""); break;
+                    case '\\': sb.append("\\\\"); break;
+                    case '\n': sb.append("\\n"); break;
+                    case '\r': sb.append("\\r"); break;
+                    case '\t': sb.append("\\t"); break;
+                    default:
+                        if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
+                        else sb.append(c);
+                }
+            }
+            sb.append('"');
+        } catch (Throwable ignored) {
         }
     }
 

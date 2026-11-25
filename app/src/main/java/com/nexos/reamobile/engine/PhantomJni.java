@@ -16,8 +16,8 @@ public final class PhantomJni {
     private PhantomJni() {
     }
 
-    public static final int MAX_CANDIDATES = 40;
-    public static final int MAX_SO_URLS = 20;
+    public static final int MAX_CANDIDATES = 100;
+    public static final int MAX_SO_URLS = 40;
     public static final int MAX_STR_LEN = 128;
     public static final int MIN_STR_LEN = 4;
 
@@ -64,42 +64,78 @@ public final class PhantomJni {
 
     /** Variante con topes inyectables (tests). Nunca null ni lanza. */
     static SoResult scanSo(byte[] head, byte[] tail, int capJni, int capUrls) {
-        SoResult r = new SoResult();
-        Set<String> seenJ = new LinkedHashSet<>();
-        Set<String> seenU = new LinkedHashSet<>();
         try {
-            int limJ = capJni <= 0 ? MAX_CANDIDATES : Math.min(capJni, 200);
-            int limU = capUrls < 0 ? 0 : Math.min(capUrls, 100);
-            List<String> window = new ArrayList<>();
-            scanBuf(head, window, r, seenJ, seenU, limJ, limU);
-            scanBuf(tail, window, r, seenJ, seenU, limJ, limU);
+            StreamScan s = new StreamScan(capJni, capUrls);
+            s.feed(head, 0, head == null ? 0 : head.length);
+            s.feed(tail, 0, tail == null ? 0 : tail.length);
+            s.finish();
+            return s.result();
         } catch (Throwable ignored) {
+            return new SoResult();
         }
-        return r;
     }
 
-    private static void scanBuf(byte[] buf, List<String> window, SoResult r,
-                                Set<String> seenJ, Set<String> seenU,
-                                int limJ, int limU) {
-        try {
-            if (buf == null) return;
-            StringBuilder cur = new StringBuilder();
-            for (int i = 0; i < buf.length; i++) {
-                if (r.jni.size() >= limJ && r.urls.size() >= limU) return;
-                int c = buf[i] & 0xFF;
-                if (c >= 32 && c < 127) {
-                    if (cur.length() < MAX_STR_LEN) cur.append((char) c);
-                } else {
-                    if (cur.length() >= MIN_STR_LEN) {
-                        consider(cur.toString(), window, r, seenJ, seenU, limJ, limU);
+    /**
+     * Escáner incremental: alimenta trozos (p. ej. el .so entero durante
+     * su lectura) y conserva estado entre trozos, incluidas cadenas
+     * cortadas en el borde. Retiene solo candidatos (≤topes). Nunca lanza.
+     */
+    public static class StreamScan {
+        private final SoResult r = new SoResult();
+        private final Set<String> seenJ = new LinkedHashSet<>();
+        private final Set<String> seenU = new LinkedHashSet<>();
+        private final List<String> window = new ArrayList<>();
+        private final StringBuilder cur = new StringBuilder();
+        private final int limJ;
+        private final int limU;
+
+        public StreamScan(int capJni, int capUrls) {
+            int lj = capJni <= 0 ? MAX_CANDIDATES : Math.min(capJni, 300);
+            int lu = capUrls < 0 ? 0 : Math.min(capUrls, 200);
+            limJ = lj;
+            limU = lu;
+        }
+
+        public StreamScan() {
+            this(MAX_CANDIDATES, MAX_SO_URLS);
+        }
+
+        /** Alimenta bytes (null-seguro). Nunca lanza. */
+        public void feed(byte[] buf, int off, int len) {
+            try {
+                if (buf == null || len <= 0) return;
+                int start = Math.max(0, off);
+                int end = Math.min(buf.length, start + len);
+                for (int i = start; i < end; i++) {
+                    if (r.jni.size() >= limJ && r.urls.size() >= limU) return;
+                    int c = buf[i] & 0xFF;
+                    if (c >= 32 && c < 127) {
+                        if (cur.length() < MAX_STR_LEN) cur.append((char) c);
+                    } else {
+                        if (cur.length() >= MIN_STR_LEN) {
+                            consider(cur.toString(), window, r, seenJ, seenU, limJ, limU);
+                        }
+                        cur.setLength(0);
                     }
-                    cur.setLength(0);
                 }
+            } catch (Throwable ignored) {
             }
-            if (cur.length() >= MIN_STR_LEN) {
-                consider(cur.toString(), window, r, seenJ, seenU, limJ, limU);
+        }
+
+        /** Cierra la cadena pendiente. Nunca lanza. */
+        public void finish() {
+            try {
+                if (cur.length() >= MIN_STR_LEN) {
+                    consider(cur.toString(), window, r, seenJ, seenU, limJ, limU);
+                }
+                cur.setLength(0);
+            } catch (Throwable ignored) {
             }
-        } catch (Throwable ignored) {
+        }
+
+        /** Resultado acumulado. Nunca null ni lanza. */
+        public SoResult result() {
+            return r;
         }
     }
 
@@ -125,7 +161,7 @@ public final class PhantomJni {
                 if (seenJ.add(cand) && r.jni.size() < limJ) r.jni.add(cand);
             } else if (isMethodName(s)) {
                 window.add(s);
-                if (window.size() > 4) window.remove(0);
+                if (window.size() > 8) window.remove(0);
             }
         } catch (Throwable ignored) {
         }

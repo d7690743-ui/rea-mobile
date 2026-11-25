@@ -78,4 +78,34 @@ public class PhantomJniTest {
         assertTrue(PhantomJni.summarize(links.get(0)).contains("lib/x.so"));
         assertTrue(PhantomJni.link(null, g).isEmpty());
     }
+
+    @Test
+    public void streamingParidadYBordes() {
+        byte[] full = bytes("nativeInit", "(Ljava/lang/String;)V",
+                "nota https://s.test/a fin");
+        PhantomJni.SoResult ref = PhantomJni.scanSo(full, null);
+        PhantomJni.StreamScan s = new PhantomJni.StreamScan();
+        for (int i = 0; i < full.length; i += 3) {
+            s.feed(full, i, Math.min(3, full.length - i));
+        }
+        s.finish();
+        assertEquals(ref.jni, s.result().jni);
+        assertEquals(ref.urls, s.result().urls);
+        assertTrue(s.result().jni.contains("nativeInit|(Ljava/lang/String;)V"));
+    }
+
+    @Test
+    public void streamingCorteMitadCadena() throws Exception {
+        PhantomJni.StreamScan s = new PhantomJni.StreamScan();
+        s.feed("nat".getBytes("UTF-8"), 0, 3);
+        s.feed("iveGo".getBytes("UTF-8"), 0, 5);
+        s.feed(new byte[]{0, 1}, 0, 2);
+        s.feed("(I)V".getBytes("UTF-8"), 0, 5);
+        s.feed(new byte[]{0}, 0, 1);
+        s.finish();
+        assertTrue(s.result().jni.toString(),
+                s.result().jni.contains("nativeGo|(I)V"));
+        s.feed(null, 0, 0);
+        s.finish();
+    }
 }

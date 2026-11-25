@@ -19,6 +19,8 @@ public final class SmaliDumper {
     public static final int MAX_CLASSES = 1500;
     public static final int MAX_UNITS_PER_METHOD = 6000;
     public static final long MAX_TOTAL_BYTES = 40L * 1024 * 1024;
+    /** Tope de fallos retenidos (failTotal cuenta todos). Solo FullDump. */
+    public static final int MAX_FAILURES = 5000;
     /** T2: cotas de emisión por clase y por método (se comprueban durante). */
     public static final int MAX_CHARS_PER_CLASS = 2 * 1024 * 1024;
     public static final int MAX_CHARS_PER_METHOD = 256 * 1024;
@@ -166,6 +168,21 @@ public final class SmaliDumper {
         public int scanned;
         public int dumped;
         public int ownMatched;
+        /** Fallos por clase "dexDir|clase|motivo" (tope MAX_FAILURES). */
+        public List<String> failures = new ArrayList<>();
+        /** Fallos totales (aunque failures esté recortado). */
+        public int failTotal;
+        /** Cobertura por dex en modo FullDump (orden de volcado). */
+        public List<DexStat> dexStats = new ArrayList<>();
+    }
+
+    /** Cobertura de un dex en el volcado total. Nunca lanza. */
+    public static class DexStat {
+        public String dex = "?";
+        public int scanned;
+        public int dumped;
+        public int failed;
+        public long bytes;
     }
 
     /** Destino de clases volcadas (p. ej. escribir directo al ZIP). */
@@ -249,18 +266,87 @@ public final class SmaliDumper {
 
         /** Vuelca un dex completo al sink (null-seguro). Nunca lanza. */
         public void addDex(byte[] dex) {
+            addDex(dex, "classes.dex");
+        }
+
+        /**
+         * Variante con nombre de dex: las rutas salen como
+         * "smali/&lt;dex&gt;/…" y la cobertura queda en dexStats.
+         * Null-seguro. Nunca lanza.
+         */
+        public void addDex(byte[] dex, String dexName) {
+            String dir = dexDir(dexName);
+            int s0 = r.scanned;
+            int d0 = r.dumped;
+            int f0 = r.failTotal;
+            long b0 = r.bytes;
             try {
                 if (dex == null) return;
-                dumpFull(dex, ownSlash, sink, r);
+                dumpFull(dex, ownSlash, sink, r, dir);
             } catch (Stop s) {
                 r.truncated = true;
                 r.notes.add("smali: detenido (" + s.getMessage() + ")");
             } catch (RuntimeException e) {
                 r.notes.add("dex omitido: " + e.getMessage());
+                recordFailure(r, dir, "?", "dex omitido: " + e.getMessage());
             } catch (OutOfMemoryError e) {
                 r.truncated = true;
                 r.notes.add("dex omitido (memoria)");
+                recordFailure(r, dir, "?", "dex omitido (memoria)");
+            } finally {
+                DexStat st = new DexStat();
+                st.dex = dexName == null ? "?" : dexName;
+                st.scanned = r.scanned - s0;
+                st.dumped = r.dumped - d0;
+                st.failed = r.failTotal - f0;
+                st.bytes = r.bytes - b0;
+                r.dexStats.add(st);
             }
+        }
+    }
+
+    /**
+     * "classes2.dex" → "classes2" (saneado a [A-Za-z0-9._-], tope 32).
+     * Nunca lanza; nunca vacío.
+     */
+    public static String dexDir(String dexName) {
+        try {
+            String n = dexName == null ? "" : dexName;
+            int slash = n.lastIndexOf('/');
+            if (slash >= 0) n = n.substring(slash + 1);
+            if (n.toLowerCase().endsWith(".dex")) {
+                n = n.substring(0, n.length() - 4);
+            }
+            StringBuilder b = new StringBuilder();
+            for (int i = 0; i < n.length() && b.length() < 32; i++) {
+                char c = n.charAt(i);
+                boolean ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                        || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+                b.append(ok ? c : '_');
+            }
+            return b.length() == 0 ? "classes" : b.toString();
+        } catch (Throwable ignored) {
+            return "classes";
+        }
+    }
+
+    /**
+     * Registra un fallo con motivo (lista + contador total + nota
+     * resumida). Nunca lanza.
+     */
+    private static void recordFailure(DumpResult r, String dexDir,
+                                     String cls, String why) {
+        try {
+            if (r == null) return;
+            r.failTotal++;
+            String w = why == null || why.isEmpty() ? "motivo desconocido" : why;
+            if (w.length() > 160) w = w.substring(0, 160);
+            String c = cls == null ? "?" : cls;
+            if (r.failures.size() < MAX_FAILURES) {
+                r.failures.add(dexDir + "|" + c + "|" + w);
+            }
+            if (r.notes.size() < 200) r.notes.add(c + ": omitida (" + w + ")");
+        } catch (Throwable ignored) {
         }
     }
 
@@ -430,10 +516,12 @@ public final class SmaliDumper {
     }
 
     /**
-     * Núcleo del volcado total: todas las clases al sink, resúmenes solo
-     * propias. Sin topes de memoria; los truncados van a notas (tope 200).
+     * Núcleo del volcado total: todas las clases al sink como
+     * "smali/&lt;dexDir&gt;/…", resúmenes solo propias. Sin topes de memoria;
+     * cada clase fallida queda en failures con motivo y no tumba el resto.
      */
-    private static void dumpFull(byte[] dex, String ownSlash, ClassSink sink, DumpResult r) {
+    private static void dumpFull(byte[] dex, String ownSlash, ClassSink sink,
+                                 DumpResult r, String dexDir) {
         if (dex == null || dex.length < 0x70 || dex[0] != 'd' || dex[1] != 'e' || dex[2] != 'x') {
             throw new IllegalArgumentException("dex inválido");
         }
@@ -445,15 +533,21 @@ public final class SmaliDumper {
             int p = classOff + i * 32;
             if (p + 32 > dex.length) break;
             int classIdx = u32(dex, p);
-            int access = u32(dex, p + 4);
-            int superIdx = u32(dex, p + 8);
-            int srcIdx = u32(dex, p + 16);
-            int dataOff = u32(dex, p + 24);
             String cls = typeAt(t, classIdx);
+            if ("?".equals(cls)) {
+                r.scanned++;
+                recordFailure(r, dexDir, "?idx" + classIdx,
+                        "descriptor ilegible (type_idx=" + classIdx + ")");
+                continue;
+            }
             r.scanned++;
             boolean own = !ownSlash.isEmpty() && cls.startsWith("L" + ownSlash);
             if (own) r.ownMatched++;
             try {
+                int access = u32(dex, p + 4);
+                int superIdx = u32(dex, p + 8);
+                int srcIdx = u32(dex, p + 16);
+                int dataOff = u32(dex, p + 24);
                 // Resúmenes solo propias: volcado temporal y descarte si ajena.
                 int sum0 = r.classSummaries.size();
                 String text = dumpClass(dex, t, r, cls, access, superIdx, srcIdx, dataOff,
@@ -462,16 +556,17 @@ public final class SmaliDumper {
                     r.classSummaries.remove(r.classSummaries.size() - 1);
                 }
                 if (sink != null) {
-                    sink.accept("smali/" + cls.substring(1, cls.length() - 1) + ".smali", text);
+                    sink.accept("smali/" + dexDir + "/"
+                            + cls.substring(1, cls.length() - 1) + ".smali", text);
                 }
                 r.bytes += text.length();
                 r.dumped++;
             } catch (Stop s) {
                 throw s;
             } catch (RuntimeException e) {
-                if (r.notes.size() < 200) r.notes.add(cls + ": omitida (" + e.getMessage() + ")");
+                recordFailure(r, dexDir, cls, e.getMessage());
             } catch (OutOfMemoryError e) {
-                if (r.notes.size() < 200) r.notes.add(cls + ": omitida (memoria)");
+                recordFailure(r, dexDir, cls, "memoria");
             }
         }
     }

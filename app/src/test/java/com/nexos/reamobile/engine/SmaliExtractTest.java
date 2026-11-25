@@ -6,8 +6,10 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -61,13 +63,139 @@ public class SmaliExtractTest {
         assertEquals(1, r.smaliClasses);
         assertEquals(4, r.copiedEntries);
         ZipFile zf = new ZipFile(out);
-        assertNotNull(zf.getEntry("rea/smali/com/x/A.smali"));
+        assertNotNull(zf.getEntry("rea/smali/classes/com/x/A.smali"));
         assertNotNull(zf.getEntry("rea/manifest.xml"));
         assertNotNull(zf.getEntry("rea/ARBOL.txt"));
         assertNotNull(zf.getEntry("rea/CLASES_PROPIAS.txt"));
         assertNotNull(zf.getEntry("rea/INFORME.txt"));
+        assertNotNull(zf.getEntry("rea/smali_index.json"));
+        assertNotNull(zf.getEntry("rea/SMALI_FALLOS.txt"));
+        assertNotNull(zf.getEntry("rea/NATIVO_simbolos.txt"));
         assertNotNull(zf.getEntry("apk/res/values/strings.xml"));
         zf.close();
+    }
+
+    @Test
+    public void smaliPorDexConIndice() throws Exception {
+        File apk = new File(tmp.getRoot(), "multi.apk");
+        ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(apk));
+        put(zos, "AndroidManifest.xml", "no-es-axml".getBytes(StandardCharsets.UTF_8));
+        put(zos, "classes.dex", buildTestDex());
+        put(zos, "classes2.dex", buildTestDex());
+        zos.close();
+        File out = new File(tmp.getRoot(), "out.zip");
+        ReaEngine.ExtractResult r = ReaEngine.extractToZip(apk, out);
+        assertNull(r.error);
+        assertEquals(2, r.smaliClasses);
+        ZipFile zf = new ZipFile(out);
+        assertNotNull(zf.getEntry("rea/smali/classes/com/x/A.smali"));
+        assertNotNull(zf.getEntry("rea/smali/classes2/com/x/A.smali"));
+        String idx = readEntry(zf, "rea/smali_index.json");
+        assertTrue(idx, idx.contains("\"dex\":\"classes.dex\""));
+        assertTrue(idx, idx.contains("\"dex\":\"classes2.dex\""));
+        assertTrue(idx, idx.contains("\"ok\":2"));
+        assertTrue(idx, idx.contains("\"fallos\":0"));
+        zf.close();
+    }
+
+    @Test
+    public void smaliFalloConMotivo() {
+        byte[] good = buildTestDex();
+        byte[] bad = good.clone();
+        int classOff = le32(bad, 100);
+        bad[classOff + 24] = (byte) 0xFF;
+        bad[classOff + 25] = (byte) 0xFF;
+        bad[classOff + 26] = (byte) 0xFF;
+        bad[classOff + 27] = (byte) 0x7F;
+        SmaliDumper.FullDump full = new SmaliDumper.FullDump("com/x/", null);
+        full.addDex(bad, "classes9.dex");
+        assertEquals(1, full.r.scanned);
+        assertEquals(0, full.r.dumped);
+        assertEquals(1, full.r.failTotal);
+        assertEquals(1, full.r.failures.size());
+        assertTrue(full.r.failures.get(0),
+                full.r.failures.get(0).startsWith("classes9|Lcom/x/A;|"));
+        String motivo = full.r.failures.get(0).split("\\|", 3)[2];
+        assertTrue("motivo vacío", motivo.length() > 0);
+        assertEquals(1, full.r.dexStats.size());
+        assertEquals("classes9.dex", full.r.dexStats.get(0).dex);
+        assertEquals(1, full.r.dexStats.get(0).failed);
+        full.addDex(good, "classes.dex");
+        assertEquals(1, full.r.dumped);
+        assertEquals(2, full.r.dexStats.size());
+    }
+
+    @Test
+    public void descriptorIlegibleNoTumba() {
+        byte[] bad = buildTestDex();
+        int classOff = le32(bad, 100);
+        bad[classOff] = (byte) 0xFF;
+        bad[classOff + 1] = (byte) 0xFF;
+        bad[classOff + 2] = (byte) 0xFF;
+        bad[classOff + 3] = (byte) 0x7F;
+        SmaliDumper.FullDump full = new SmaliDumper.FullDump("com/x/", null);
+        full.addDex(bad, "classes.dex");
+        assertEquals(1, full.r.scanned);
+        assertEquals(0, full.r.dumped);
+        assertEquals(1, full.r.failTotal);
+        assertTrue(full.r.failures.get(0),
+                full.r.failures.get(0).contains("descriptor ilegible"));
+    }
+
+    @Test
+    public void dexDirSanea() {
+        assertEquals("classes", SmaliDumper.dexDir("classes.dex"));
+        assertEquals("classes2", SmaliDumper.dexDir("classes2.dex"));
+        assertEquals("classes", SmaliDumper.dexDir(null));
+        assertEquals("classes", SmaliDumper.dexDir(""));
+        assertEquals("x", SmaliDumper.dexDir("../../x"));
+        assertEquals("smali/com/x/A.smali",
+                ReaEngine.shortSmaliPath("smali/classes2/com/x/A.smali"));
+        assertEquals("", ReaEngine.shortSmaliPath(null));
+    }
+
+    @Test
+    public void crudosYnativoGarantizados() throws Exception {
+        File apk = new File(tmp.getRoot(), "raw.apk");
+        ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(apk));
+        put(zos, "AndroidManifest.xml", "no-es-axml".getBytes(StandardCharsets.UTF_8));
+        put(zos, "classes.dex", buildTestDex());
+        put(zos, "res/layout/a.xml", "<x/>".getBytes(StandardCharsets.UTF_8));
+        put(zos, "resources.arsc", ArscTableTest.buildArsc());
+        put(zos, "assets/x.txt", "hola".getBytes(StandardCharsets.UTF_8));
+        put(zos, "lib/arm64-v8a/libt.so", AlfaElfTest.buildElf32());
+        zos.close();
+        File out = new File(tmp.getRoot(), "out.zip");
+        ReaEngine.ExtractResult r = ReaEngine.extractToZip(apk, out);
+        assertNull(r.error);
+        ZipFile zf = new ZipFile(out);
+        assertNotNull(zf.getEntry("apk/res/layout/a.xml"));
+        assertNotNull(zf.getEntry("apk/resources.arsc"));
+        assertNotNull(zf.getEntry("apk/assets/x.txt"));
+        assertNotNull(zf.getEntry("apk/lib/arm64-v8a/libt.so"));
+        String ids = readEntry(zf, "rea/recursos_ids.json");
+        assertTrue(ids, ids.contains("0x7f010000"));
+        String nat = readEntry(zf, "rea/NATIVO_simbolos.txt");
+        assertTrue(nat, nat.contains("lib/arm64-v8a/libt.so"));
+        zf.close();
+        assertTrue(r.notes.toString(), r.notes.toString().contains("crudos: res=1"));
+    }
+
+    static String readEntry(ZipFile zf, String name) throws Exception {
+        ZipEntry e = zf.getEntry(name);
+        assertNotNull(name, e);
+        InputStream in = zf.getInputStream(e);
+        ByteArrayOutputStream b = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
+        in.close();
+        return new String(b.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+    static int le32(byte[] b, int p) {
+        return (b[p] & 0xFF) | ((b[p + 1] & 0xFF) << 8)
+                | ((b[p + 2] & 0xFF) << 16) | ((b[p + 3] & 0xFF) << 24);
     }
 
     @Test
@@ -207,7 +335,7 @@ public class SmaliExtractTest {
         assertEquals(0, fd.r.ownMatched);
         assertTrue(fd.r.classSummaries.isEmpty());
         assertEquals(2, paths.size());
-        assertTrue(paths.contains("smali/com/x/A.smali"));
+        assertTrue(paths.toString(), paths.contains("smali/classes/com/x/A.smali"));
         fd.addDex(null);
         fd.addDex(new byte[10]);
     }

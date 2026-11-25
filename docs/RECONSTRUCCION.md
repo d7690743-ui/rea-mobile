@@ -90,3 +90,19 @@ Buen inventario forense; insuficiente para reconstruir (0 pantallas,
 URLs sin método, sin agrupación funcional, sin JSON).
 Ruta: `REA-Mobile/com_google_android_apps_youtube_music/informe_completo (2).txt`
 en Descargas compartida.
+
+## Extracción funcional (v0.4.2, sin motores nuevos)
+
+El ZIP es el artefacto para replicar/modificar, ampliando motores existentes:
+
+- Smali total por DEX: `rea/smali/<classesN>/…` en streaming (una clase
+  cada vez al ZipOutputStream, tope 500 MB solo-ZIP; los topes 1500/40 MB
+  quedan solo para el informe). `rea/smali_index.json` trae cobertura por
+  DEX y cada fallo con motivo; `rea/SMALI_FALLOS.txt` es la vista humana.
+- Crudos garantizados en `apk/`: `res/`, `resources.arsc`, `assets/`,
+  `lib/` y manifest van en pasada 0 (el tope total ya no los deja fuera).
+  Además `rea/recursos_ids.json` (mapa ID→nombre) y `rea/layouts/` legibles;
+  `layouts=n/a` en Compose/splits es esperable, no un fallo.
+- Nativo pragmático: sin desensamblado ARM64; `RegisterNatives` completo
+  (rastreo en streaming del .so entero durante su lectura, sin E/S extra)
+  y `rea/NATIVO_simbolos.txt` con imports/exports/JNI/URLs por .so.
