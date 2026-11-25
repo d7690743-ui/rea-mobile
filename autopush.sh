@@ -13,6 +13,7 @@ git add settings.gradle build.gradle gradle.properties .gitignore \
   app/src/main/java/com/nexos/reamobile/MainActivity.kt \
   app/src/main/java/com/nexos/reamobile/ZipShareProvider.java \
   app/src/main/java/com/nexos/reamobile/engine/AxmlDecoder.java \
+  app/src/test/java/com/nexos/reamobile/engine/AxmlDecoderTest.java \
   app/src/main/java/com/nexos/reamobile/engine/DexParser.java \
   app/src/main/java/com/nexos/reamobile/engine/ArscStrings.java \
   app/src/main/java/com/nexos/reamobile/engine/ReaEngine.java \
@@ -131,3 +132,16 @@ git add settings.gradle build.gradle gradle.properties .gitignore \
   README.md
 git commit -m "$MSG" || echo "Nada nuevo que commitear."
 git push -u origin master
+# Verificación final (Fase E): el push aterrizó y no queda nada fuera.
+LOCAL=$(git rev-parse master)
+REMOTE=$(git rev-parse origin/master)
+if [ "$LOCAL" != "$REMOTE" ]; then
+  echo "AVISO: master ($LOCAL) != origin/master ($REMOTE)"
+  exit 1
+fi
+if [ -n "$(git status --porcelain)" ]; then
+  echo "AVISO: quedan cambios sin commitear:"
+  git status --porcelain
+  exit 1
+fi
+echo "Push verificado: $LOCAL limpio y sincronizado."

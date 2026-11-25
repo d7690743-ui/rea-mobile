@@ -11,8 +11,8 @@ android {
         applicationId 'com.nexos.reamobile'
         minSdk 24
         targetSdk 35
-        versionCode 10
-        versionName '0.4.0'
+        versionCode 11
+        versionName '0.4.1'
     }
 
     signingConfigs {
@@ -30,6 +30,8 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
+            // Interno: firmado con la misma clave debug fija (ver arriba).
+            signingConfig signingConfigs.debug
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }

@@ -28,3 +28,8 @@ perfil + retrieval exacto sobre evidencias propias, sin persistencia.
 y YT→ofuscado por ratio), orden por perfil, cobertura vacía/con datos,
 packer→ofuscado, malas. `ReaEngineTest.coberturaInformeYRegistro`:
 sección, `[perfil]` y JSON. `puenteIntel` intacto.
+
+## Auditoría (fases A–E, v0.4.1)
+
+`SearchPlan` y la sección de cobertura: revisados, sin cambios
+necesarios (estados declarados intactos, suite en verde).

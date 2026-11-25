@@ -31,7 +31,8 @@ public class PhantomJniTest {
     public void detectaParNombreFirma() {
         byte[] head = bytes("nativeInit", "(Ljava/lang/String;)V", "ruido");
         List<String> cands = PhantomJni.scanStrings(head, null);
-        assertTrue(cands.toString(), cands.contains("nativeInit|(Ljava/lang/String;)V"));
+        assertEquals(1, cands.size());
+        assertEquals("nativeInit|(Ljava/lang/String;)V", cands.get(0));
     }
 
     @Test

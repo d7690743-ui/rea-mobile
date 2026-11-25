@@ -66,8 +66,8 @@ public class JadxAdapterTest {
         Files.write(basura.toPath(), new byte[]{1, 2, 3, 4, 5, 6, 7, 8});
         JadxAdapter.Result r2 = JadxAdapter.decompileFiltered(
                 basura, tmp.getRoot(), 1, new ArrayList<String>(), 10, null);
-        assertTrue("basura: error o vacío, nunca lanzar",
-                r2.error != null || r2.sources.isEmpty());
+        assertEquals("entrada no válida: ni ZIP ni DEX", r2.error);
+        assertTrue(r2.sources.isEmpty());
     }
 
     @Test(timeout = 180000)

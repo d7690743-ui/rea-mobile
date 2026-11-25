@@ -99,8 +99,12 @@ public class AlfaCorrTest {
         map.put("Lcom/x/C;->ayuda", "INTERNET|Ljava/net/URL;->openConnection");
         List<AlfaCorr.Chain> cs = AlfaCorr.correlate(
                 Arrays.asList("https://s.com/"), null, refs, g, null, map);
+        assertEquals(1, cs.size());
         assertEquals("INTERNET", cs.get(0).permiso);
-        assertTrue(cs.get(0).api.contains("URL"));
+        assertEquals("Ljava/net/URL;->openConnection", cs.get(0).api);
+        assertEquals("https://s.com/", cs.get(0).destino);
+        assertEquals("s.com", cs.get(0).host);
+        assertTrue(cs.get(0).metodos.contains("Lcom/x/C;->onCreate"));
     }
 
     @Test

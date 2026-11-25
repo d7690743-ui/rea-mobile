@@ -312,6 +312,10 @@ public final class JadxAdapter {
                 return decompileZip(input, workDir, threads, pkgSlashes,
                         maxClasses, progress, mem, prioritySmali);
             }
+            if (!isDex(input)) {
+                r.error = "entrada no válida: ni ZIP ni DEX";
+                return r;
+            }
             return decompileSingle(input, workDir, threads, pkgSlashes,
                     maxClasses, progress, mem, input.getName(), prioritySmali);
         } catch (Throwable t) {
@@ -683,6 +687,26 @@ public final class JadxAdapter {
             byte[] magic = new byte[4];
             if (in.read(magic) != 4) return false;
             return magic[0] == 'P' && magic[1] == 'K' && magic[2] == 3 && magic[3] == 4;
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            if (in != null) {
+                try {
+                    in.close();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+    }
+
+    /** Magia "dex\n" en los primeros 4 bytes. Nunca lanza. */
+    static boolean isDex(File f) {
+        FileInputStream in = null;
+        try {
+            in = new FileInputStream(f);
+            byte[] magic = new byte[4];
+            if (in.read(magic) != 4) return false;
+            return magic[0] == 'd' && magic[1] == 'e' && magic[2] == 'x' && magic[3] == '\n';
         } catch (Throwable t) {
             return false;
         } finally {

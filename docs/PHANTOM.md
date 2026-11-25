@@ -139,3 +139,14 @@ Del descompilado apktool de YTM (37.365 smali) salieron 8 adaptaciones:
 Estimación YTM: 26% → 34–40% campos OK (pantallas +20–32,
 datos +15–25, almacén +5–12); permisos/red/nativas sin cambio
 (fuera del alcance P3).
+
+## Auditoría (fases C–E, v0.4.1)
+
+- `PhantomMetric.containsToken`: coincidencia por token (antes
+  substring; "##-##" ya no casa con "lorem-##-ipsum").
+- `PhantomNames.isObfuscated` delega en `DexParser.isShortName`
+  (una sola definición; R8 3–5 minúsculas cubierta).
+- `PhantomUi`/`PhantomTaint`: cachés de constantes y pares JNI por
+  ejecución (antes re-derivaban por clase).
+- `PhantomJniTest.detectaParNombreFirma`: par exacto + tamaño 1.
+- Métrica sin cambio de umbrales; P3 verificado intacto.

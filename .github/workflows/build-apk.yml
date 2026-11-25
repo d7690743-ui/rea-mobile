@@ -2,6 +2,8 @@ name: Build APK (debug)
 on:
   push:
     branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 jobs:
   build:
@@ -19,10 +21,19 @@ jobs:
         run: chmod +x gradlew
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
+      - name: Lint (debug)
+        run: ./gradlew :app:lintDebug --stacktrace
       - name: Unit tests (motor JVM)
         run: ./gradlew :app:testDebugUnitTest --stacktrace
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --stacktrace
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/*.apk
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release
+          path: app/build/outputs/apk/release/*.apk

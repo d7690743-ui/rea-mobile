@@ -46,3 +46,19 @@ Nota v0.3.2: APK intenta carga completa (125 java, 0 err) y si aborta
 por memoria reintenta por dex (medido: 124 java, 8 err métodos cross-dex).
 Se devuelve el mejor parcial; el visor muestra fases ("cargando APK",
 "dex i/N", "reintentando por dex").
+
+## Auditoría (fases A–E, v0.4.1)
+
+- T1: registros high (nibbles AG) en `invoke-35c`: antes G=0 se leía
+  como regs vacíos (falso negativo silencioso); ahora `regA/regG` con
+  test `IrBuilderTest.invoke35cNibblesAG`.
+- Firma: `sigIntegridad` verifica digests v2/v3 (spec AOSP) en vez de
+  afirmar solo presencia. Probado: OK en 3 APK propios firmados por
+  apksigner + FALLA al voltear 1 byte; sintético OK/FALLA/sin-bloque
+  (`ApkSigBlockTest`, 6 pruebas).
+- AXML: `AxmlDecoderTest` con manifest binario mínimo a mano (pool
+  UTF-16, namespace, `package` + `uses-permission`); aserciones
+  endurecidas en `JadxAdapterTest` (basura→error exacto + `isDex`
+  fail-fast), `AlfaCorrTest` (cadena exacta) y `PhantomJniTest`
+  (par exacto, tamaño 1).
+- Suite local: 255 pruebas JVM en verde; CI añade lint + release + PR.
