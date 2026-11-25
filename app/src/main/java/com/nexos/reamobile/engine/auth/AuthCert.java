@@ -82,16 +82,8 @@ public final class AuthCert {
                         : c.getSerialNumber().toString(16).toUpperCase();
             } catch (Throwable ignored) {
             }
-            try {
-                i.notBefore = c.getNotBefore() == null ? ""
-                        : c.getNotBefore().toInstant().toString();
-            } catch (Throwable ignored) {
-            }
-            try {
-                i.notAfter = c.getNotAfter() == null ? ""
-                        : c.getNotAfter().toInstant().toString();
-            } catch (Throwable ignored) {
-            }
+            i.notBefore = isoUtc(c.getNotBefore());
+            i.notAfter = isoUtc(c.getNotAfter());
             try {
                 i.sigAlg = nz(c.getSigAlgName());
             } catch (Throwable ignored) {
@@ -152,6 +144,19 @@ public final class AuthCert {
             return (X509Certificate) cf.generateCertificate(new ByteArrayInputStream(der));
         } catch (Throwable ignored) {
             return null;
+        }
+    }
+
+    /** Fecha en ISO-8601 UTC (SimpleDateFormat: válido en API 24). Nunca lanza. */
+    private static String isoUtc(java.util.Date d) {
+        try {
+            if (d == null) return "";
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat(
+                    "yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US);
+            f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            return f.format(d);
+        } catch (Throwable ignored) {
+            return "";
         }
     }
 
