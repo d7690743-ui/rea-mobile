@@ -1200,20 +1200,26 @@ public final class SmaliDumper {
     }
 
     /** Emite un método. Devuelve 1 y acumula instrucciones en counts[0]. */
+    /** Marca de método recortado (única fuente; la red de seguridad la detecta). */
+    private static final String CUT_MARK = "[...método recortado: tope 256K caracteres...]";
+
     /** renderMethod con tope por método (T2): recorta y re-cierra el bloque. Nunca lanza. */
     private static int renderMethodCapped(byte[] dex, Tables t, StringBuilder sb, int mIdx, int acc,
                                           int codeOff, int[] counts, AnnotDir annots) {
         int start = sb.length();
-        int m = renderMethod(dex, t, sb, mIdx, acc, codeOff, counts, annots);
-        if (sb.length() - start > MAX_CHARS_PER_METHOD) {
+        int m = renderMethod(dex, t, sb, mIdx, acc, codeOff, counts, annots, start);
+        // Red de seguridad para anotaciones gigantes: si renderCode ya cortó
+        // (marca presente), no recortar de nuevo.
+        if (sb.length() - start > MAX_CHARS_PER_METHOD
+                && sb.indexOf(CUT_MARK, start) < 0) {
             sb.setLength(start + MAX_CHARS_PER_METHOD);
-            sb.append("\n    # [...método recortado: tope 256K caracteres...]\n.end method\n\n");
+            sb.append("\n    # ").append(CUT_MARK).append("\n.end method\n\n");
         }
         return m;
     }
 
     private static int renderMethod(byte[] dex, Tables t, StringBuilder sb, int mIdx, int acc, int codeOff,
-                                    int[] counts, AnnotDir annots) {
+                                    int[] counts, AnnotDir annots, int methodStart) {
         String cls = "?";
         String name = "?";
         String proto = "()?";
@@ -1237,7 +1243,7 @@ public final class SmaliDumper {
         }
         if (codeOff != 0) {
             try {
-                counts[0] += renderCode(dex, t, sb, codeOff, methodAnn, paramAnns);
+                counts[0] += renderCode(dex, t, sb, codeOff, methodAnn, paramAnns, methodStart);
             } catch (RuntimeException e) {
                 sb.append("    # código omitido\n");
             }
@@ -1249,7 +1255,7 @@ public final class SmaliDumper {
     }
 
     private static int renderCode(byte[] dex, Tables t, StringBuilder sb, int codeOff,
-                                  String methodAnn, List<String> paramAnns) {
+                                  String methodAnn, List<String> paramAnns, int methodStart) {
         check(dex, codeOff, 16);
         int regs = u16(dex, codeOff);
         int ins = u16(dex, codeOff + 2);
@@ -1343,9 +1349,15 @@ public final class SmaliDumper {
             if (tgt >= 0 && tgt < n) targets.put(tgt, Boolean.TRUE);
             p += size;
         }
-        // Pasada 2: emisión con etiquetas.
+        // Pasada 2: emisión con etiquetas (corte incremental anti-pico).
         int count = 0;
+        boolean cut = false;
         for (int i = 0; i < addrs.size(); i++) {
+            if (sb.length() - methodStart > MAX_CHARS_PER_METHOD) {
+                sb.append("\n    # ").append(CUT_MARK).append('\n');
+                cut = true;
+                break;
+            }
             int addr = addrs.get(i);
             if (targets.containsKey(addr)) sb.append(lbl(addr)).append('\n');
             int op = units[addr] & 0xFF;
@@ -1360,12 +1372,14 @@ public final class SmaliDumper {
             }
             count++;
         }
-        // Etiquetas al final del código (fin de try == n).
-        for (TryItem ti : tries) {
-            if (ti != null && ti.end == n && ti.end > 0) sb.append(lbl(ti.end)).append('\n');
+        if (!cut) {
+            // Etiquetas al final del código (fin de try == n).
+            for (TryItem ti : tries) {
+                if (ti != null && ti.end == n && ti.end > 0) sb.append(lbl(ti.end)).append('\n');
+            }
+            for (String cl : catchLines) sb.append(cl).append('\n');
+            if (insnsSize > n) sb.append("    # ...recortado (tope)\n");
         }
-        for (String cl : catchLines) sb.append(cl).append('\n');
-        if (insnsSize > n) sb.append("    # ...recortado (tope)\n");
         return count;
     }
 

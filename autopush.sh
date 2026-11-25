@@ -125,6 +125,7 @@ git add settings.gradle build.gradle gradle.properties .gitignore \
   docs/PHANTOM.md \
   autopush.sh \
   app/src/main/java/com/nexos/reamobile/Session.kt \
+  app/src/test/java/com/nexos/reamobile/SessionCacheTest.kt \
   app/src/main/java/com/nexos/reamobile/CodeViewerActivity.kt \
   docs/FASE3_MOTOR_PROPIO.md \
   docs/FASE5_MATRIZ.md \

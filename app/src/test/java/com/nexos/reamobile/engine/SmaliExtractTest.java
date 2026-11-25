@@ -358,6 +358,20 @@ public class SmaliExtractTest {
     }
 
     @Test
+    public void recorteMetodoMarcaUnica() {
+        List<byte[]> dexes = new ArrayList<>();
+        dexes.add(buildHugeMethodDex(1, 40, 8192));
+        String smali = SmaliDumper.dumpSingleClass(dexes, "Lcom/x/H;");
+        assertNotNull(smali);
+        String mark = "[...método recortado: tope 256K caracteres...]";
+        int first = smali.indexOf(mark);
+        assertTrue(smali, first >= 0);
+        assertEquals("doble marca", -1, smali.indexOf(mark, first + 1));
+        assertTrue("len=" + smali.length(),
+                smali.length() < SmaliDumper.MAX_CHARS_PER_METHOD + 4096);
+    }
+
+    @Test
     public void claseGiganteRecortada() {
         List<byte[]> dexes = new ArrayList<>();
         dexes.add(buildHugeMethodDex(10, 40, 8192));

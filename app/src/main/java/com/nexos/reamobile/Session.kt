@@ -13,6 +13,8 @@ object Session {
     var dexBytes: List<ByteArray> = emptyList()
     /** Tope de clases por caché (H6): LRU, sincronizado, con instantáneas. */
     const val MAX_CACHE_CLASSES = 400
+    /** Tope de caracteres por caché (P1-4): 400 entradas × 2 MB era teórico. */
+    const val MAX_CACHE_CHARS = 20_000_000
     private fun <K, V> lru(): MutableMap<K, V> = Collections.synchronizedMap(
         object : LinkedHashMap<K, V>(64, 0.75f, true) {
             override fun removeEldestEntry(e: Map.Entry<K, V>): Boolean =
@@ -21,6 +23,38 @@ object Session {
     val smaliCache: MutableMap<String, String> = lru()
     var smaliTruncated = false
     val jadxCache: MutableMap<String, String> = lru()
+    /** Inserta recortando por bytes además de por entradas (P1-4). */
+    fun putSmali(key: String, value: String) {
+        smaliCache[key] = value
+        trimCache(smaliCache)
+    }
+    fun putJadx(key: String, value: String) {
+        jadxCache[key] = value
+        trimCache(jadxCache)
+    }
+    /** Recorta las entradas más antiguas hasta el tope de caracteres. */
+    fun trimCache(map: MutableMap<String, String>) {
+        synchronized(map) {
+            var total = 0
+            for (v in map.values) total += v.length
+            if (total <= MAX_CACHE_CHARS) return
+            val it = map.entries.iterator()
+            while (total > MAX_CACHE_CHARS && it.hasNext()) {
+                val e = it.next()
+                total -= e.value.length
+                try {
+                    it.remove()
+                } catch (t: Throwable) {
+                    return
+                }
+            }
+        }
+    }
+    /** Recorta ambas cachés (tras putAll masivos). */
+    fun trimCaches() {
+        trimCache(smaliCache)
+        trimCache(jadxCache)
+    }
     /** Instantáneas para iterar sin ConcurrentModificationException. */
     fun smaliSnapshot(): LinkedHashMap<String, String> =
         synchronized(smaliCache) { LinkedHashMap(smaliCache) }

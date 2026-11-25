@@ -325,7 +325,7 @@ class CodeViewerActivity : Activity() {
             } catch (e: Throwable) {
                 null
             }
-            if (text != null) Session.smaliCache[desc] = text
+            if (text != null) Session.putSmali(desc, text)
             runOnUiThread {
                 markWorking(false)
                 progress.visibility = View.GONE
@@ -405,7 +405,7 @@ class CodeViewerActivity : Activity() {
                 val res = SmaliDumper.dumpAll(Session.dexBytes, Session.pkgSlash())
                 for (sc in res.classes) {
                     val desc = "L" + sc.path.removePrefix("smali/").removeSuffix(".smali") + ";"
-                    Session.smaliCache[desc] = sc.text
+                    Session.putSmali(desc, sc.text)
                 }
                 Session.smaliTruncated = res.truncated
             } catch (t: Throwable) {
@@ -489,10 +489,12 @@ class CodeViewerActivity : Activity() {
                     }, prio)
                 if (res.error == null) {
                     Session.jadxCache.putAll(res.sources)
+                    Session.trimCaches()
                     Session.jadxErrors = res.errors
                     Session.jadxTruncated = res.truncated
                 } else if (res.sources.isNotEmpty()) {
                     Session.jadxCache.putAll(res.sources)
+                    Session.trimCaches()
                     Session.jadxErrors = res.errors
                     Session.jadxTruncated = true
                 }

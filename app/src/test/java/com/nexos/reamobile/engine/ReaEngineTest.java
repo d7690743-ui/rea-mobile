@@ -510,4 +510,55 @@ public class ReaEngineTest {
         assertEquals("vacio", ReaEngine.normalizeZipEntry(null));
         assertEquals("x/y", ReaEngine.normalizeZipEntry("///x/./y"));
     }
+
+    @Test
+    public void topeTotalUnificado() throws Exception {
+        ByteArrayOutputStream b1 = new ByteArrayOutputStream();
+        ZipOutputStream z1 = new ZipOutputStream(b1);
+        ReaEngine.ExtractResult r1 = new ReaEngine.ExtractResult();
+        long[] t1 = new long[1];
+        assertTrue(ReaEngine.putTextTracked(z1, "rea/a.txt", "hola", t1, r1, false));
+        assertEquals(4, t1[0]);
+        assertTrue(r1.notes.isEmpty());
+        z1.close();
+        ByteArrayOutputStream b2 = new ByteArrayOutputStream();
+        ZipOutputStream z2 = new ZipOutputStream(b2);
+        ReaEngine.ExtractResult r2 = new ReaEngine.ExtractResult();
+        long[] t2 = new long[]{600L * 1024 * 1024};
+        assertTrue(!ReaEngine.putTextTracked(z2, "rea/grande.txt", "x", t2, r2, false));
+        assertTrue(!ReaEngine.putTextTracked(z2, "rea/otro.txt", "y", t2, r2, false));
+        assertEquals(1, r2.notes.size());
+        assertTrue(r2.notes.get(0), r2.notes.get(0).startsWith("tope total ZIP: "));
+        assertTrue(ReaEngine.putTextTracked(z2, "rea/EXTRACCION.txt", "z", t2, r2, true));
+        z2.close();
+    }
+
+    @Test
+    public void mascaraSecretos() {
+        String raw = "AIzaSyAOghZGza2MQSZkY_zfZ370N-PUdXEo8AI";
+        String m = ReaEngine.maskSecret("google-api: " + raw);
+        assertTrue(m, m.startsWith("google-api: AIza"));
+        assertTrue(m, !m.contains(raw));
+        assertTrue(m, m.endsWith("AI"));
+        assertEquals("x: ****", ReaEngine.maskSecret("x: abc"));
+        assertEquals("?", ReaEngine.maskSecret(null));
+        String sinEtiqueta = ReaEngine.maskSecret("supersecreto123456");
+        assertTrue(sinEtiqueta, !sinEtiqueta.contains("supersecreto123456"));
+    }
+
+    @Test
+    public void emisionEnmascaraSecretos() {
+        ReaEngine.ApkReport r = new ReaEngine.ApkReport();
+        String raw = "AIzaSyAOghZGza2MQSZkY_zfZ370N-PUdXEo8AI";
+        r.secretHitsHigh.add("google-api: " + raw);
+        r.secretHighTotal = 1;
+        r.secretHits.add("token secreto xyz");
+        String txt = r.toText();
+        assertTrue(txt, !txt.contains(raw));
+        assertTrue(txt, txt.contains("google-api: AIza"));
+        String js = r.toJson();
+        assertTrue(js, !js.contains(raw));
+        assertTrue(js, js.contains("google-api: AIza"));
+        assertTrue(r.secretHitsHigh.get(0).contains(raw));
+    }
 }

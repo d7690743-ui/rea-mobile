@@ -266,10 +266,16 @@ class MainActivity : Activity() {
                 val tmpZip = File(cacheDir, "rea_extraccion_" + System.currentTimeMillis() + ".zip")
                 cleanStaleTemps(tmpZip)
                 val res = ReaEngine.extractToZip(apk, tmpZip)
+                if (res.error != null) {
+                    try {
+                        tmpZip.delete()
+                    } catch (t: Throwable) {
+                    }
+                    throw IllegalStateException(res.error)
+                }
                 val out = File(cacheDir, ZipShareProvider.FILE_NAME)
                 if (out.exists()) out.delete()
                 if (!tmpZip.renameTo(out)) throw IllegalStateException("no se pudo publicar el ZIP")
-                if (res.error != null) throw IllegalStateException(res.error)
                 val dest = saveZipToDownloads(out, res.packageName)
                 val summary = "ZIP guardado: " + dest + "\n\n" + res.summary()
                 runOnUiThread {
